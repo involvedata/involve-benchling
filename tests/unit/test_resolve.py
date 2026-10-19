@@ -1,88 +1,53 @@
-from dataclasses import dataclass
-
 import pytest
 
 from involve_benchling import AmbiguousError, NotFoundError, resolve
+from tests.fixtures.tenant import PLASMID_SCHEMA_ID
 
 
-@dataclass
-class Item:
-    id: str
-    name: str
+def test_get_by_name_server_side(entity_resource):
+    assert resolve.get_by_name(entity_resource, "pIVD-001").id == "bfi_001"
+    assert entity_resource.calls[0]["name_any_of"] == ["pIVD-001"]
 
 
-class FilterableClient:
-    """Mimics a V3 SDK resource client with server-side name filters."""
-
-    def __init__(self, items):
-        self._items = items
-        self.calls = []
-
-    def list(self, *, name_any_of=None, name_any_of_case_sensitive=None, schema_eq=None):
-        self.calls.append(
-            {"name_any_of": name_any_of, "cs": name_any_of_case_sensitive, "schema_eq": schema_eq}
-        )
-        items = self._items
-        if name_any_of is not None:
-            wanted = [n.lower() for n in name_any_of]
-            items = [i for i in items if i.name.lower() in wanted]
-        if name_any_of_case_sensitive is not None:
-            items = [i for i in items if i.name in name_any_of_case_sensitive]
-        yield from items
+def test_get_by_name_case_sensitive_server_side(entity_resource):
+    item = resolve.get_by_name(entity_resource, "pivd-002", case_sensitive=True)
+    assert item.id == "bfi_003"
+    assert entity_resource.calls[0]["name_any_of_case_sensitive"] == ["pivd-002"]
 
 
-class BareClient:
-    """A resource with no name filter support (client-side fallback)."""
-
-    def __init__(self, items):
-        self._items = items
-
-    def list(self, **_filters):
-        yield from self._items
-
-
-ITEMS = [Item("ent_1", "Alpha"), Item("ent_2", "Beta"), Item("ent_3", "beta")]
-
-
-def test_get_by_name_server_side():
-    client = FilterableClient(ITEMS)
-    item = resolve.get_by_name(client, "Alpha")
-    assert item.id == "ent_1"
-    assert client.calls[0]["name_any_of"] == ["Alpha"]
-
-
-def test_get_by_name_case_sensitive_server_side():
-    client = FilterableClient(ITEMS)
-    assert resolve.get_by_name(client, "beta", case_sensitive=True).id == "ent_3"
-
-
-def test_get_by_name_ambiguous():
+def test_get_by_name_ambiguous(entity_resource):
     with pytest.raises(AmbiguousError) as exc:
-        resolve.get_by_name(FilterableClient(ITEMS), "Beta")
+        resolve.get_by_name(entity_resource, "PIVD-002")
     assert exc.value.count == 2
 
 
-def test_get_by_name_not_found():
+def test_get_by_name_not_found(entity_resource):
     with pytest.raises(NotFoundError):
-        resolve.get_by_name(FilterableClient(ITEMS), "Gamma")
+        resolve.get_by_name(entity_resource, "pIVD-404")
 
 
-def test_get_by_name_client_side_fallback():
-    assert resolve.get_by_name(BareClient(ITEMS), "ALPHA").id == "ent_1"
+def test_get_by_name_passes_extra_filters(entity_resource):
+    with pytest.raises(NotFoundError):
+        resolve.get_by_name(entity_resource, "Strain-900", schema_eq=PLASMID_SCHEMA_ID)
+    assert entity_resource.calls[0]["schema_eq"] == PLASMID_SCHEMA_ID
 
 
-def test_get_by_name_client_side_case_sensitive():
-    assert resolve.get_by_name(BareClient(ITEMS), "beta", case_sensitive=True).id == "ent_3"
+def test_get_by_name_client_side_fallback(unfiltered_resource):
+    assert resolve.get_by_name(unfiltered_resource, "PIVD-001").id == "bfi_001"
 
 
-def test_find_one_single_match():
-    client = FilterableClient(ITEMS)
-    assert resolve.find_one(client, name_any_of=["Alpha"]).id == "ent_1"
+def test_get_by_name_client_side_case_sensitive(unfiltered_resource):
+    item = resolve.get_by_name(unfiltered_resource, "pivd-002", case_sensitive=True)
+    assert item.id == "bfi_003"
 
 
-def test_find_one_stops_early_on_second_match():
-    assert len(resolve.find_all(FilterableClient(ITEMS))) == 3
+def test_find_one_single_match(entity_resource):
+    assert resolve.find_one(entity_resource, name_any_of=["pIVD-001"]).id == "bfi_001"
 
 
-def test_get_id_by_name():
-    assert resolve.get_id_by_name(FilterableClient(ITEMS), "Alpha") == "ent_1"
+def test_find_all_returns_every_match(entity_resource):
+    assert len(resolve.find_all(entity_resource, schema_eq=PLASMID_SCHEMA_ID)) == 3
+
+
+def test_get_id_by_name(entity_resource):
+    assert resolve.get_id_by_name(entity_resource, "pIVD-001") == "bfi_001"

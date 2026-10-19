@@ -18,7 +18,7 @@ things:
 |---|---|---|
 | **Caching** | `involve_benchling.cache` | Tiered (memory + disk, shared across processes), pickle-free JSON serialisation of SDK models, per-category TTLs. Reference data (schemas, dropdowns, registries) goes from ~500ms to <1ms. |
 | **Resolution** | `involve_benchling.resolve` | Generic `get_by_name` / `find_one` over *any* V3 resource, with typed `NotFoundError` / `AmbiguousError` instead of silent first-match. |
-| **DataFrames** | `involve_benchling.dataframes` | Explicit `to_dataframe()` that expands Benchling's `fields` structure into typed, analysis-ready columns. Optional extra. |
+| **DataFrames** | `involve_benchling.dataframes` | Explicit `to_dataframe()` that expands V3 `schemaFields` into one typed, named column per field. Optional extra. |
 | **Testing** | `involve_benchling.testing` | pytest plugin: env-based config/client fixtures and a `benchling_tracker` that cleans up every resource a test created — even on failure. |
 
 ## Install
@@ -55,9 +55,12 @@ schemas = cache.get_or_fetch(
 )
 
 # Analysis-ready dataframes:
-from involve_benchling.dataframes import to_dataframe
+from involve_benchling.dataframes import field_names, to_dataframe
 
-df = to_dataframe(benchling.custom_entity.list(schema_eq=schema_id))
+df = to_dataframe(
+    benchling.custom_entity.list(schema_eq=schema_id),
+    field_names=field_names(benchling.custom_entity_schema, schema_id),
+)
 ```
 
 ### Testing your own Benchling integrations
