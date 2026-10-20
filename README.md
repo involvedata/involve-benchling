@@ -63,6 +63,22 @@ df = to_dataframe(
 )
 ```
 
+### Read-only clients
+
+```python
+config = BenchlingConfig.from_env(read_only=True)   # or BENCHLING_READ_ONLY=1
+benchling = connect(config)
+
+benchling.folder.list()                     # fine
+benchling.folder.create(name="x", parent_id="lib_1")
+# ReadOnlyViolationError: Read-only client blocked POST .../api/v3/folder/items
+```
+
+The check sits in the `httpx` transport, below every SDK method. A
+read-only client sends only `GET`, `HEAD` and `OPTIONS`, plus the OAuth
+token exchange. Raw-response calls and methods added in later SDK releases
+are covered without a list of write verbs to maintain.
+
 ### Testing your own Benchling integrations
 
 ```python

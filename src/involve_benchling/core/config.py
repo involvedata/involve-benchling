@@ -12,6 +12,10 @@ from ..errors import ConfigError
 _ENV_PREFIX = "BENCHLING_"
 
 
+def _env_flag(name: str) -> bool:
+    return os.getenv(f"{_ENV_PREFIX}{name}", "").lower() in ("1", "true", "yes")
+
+
 @dataclass(frozen=True)
 class BenchlingConfig:
     """Connection settings for a Benchling tenant.
@@ -26,6 +30,8 @@ class BenchlingConfig:
     oauth_client_secret: str | None = None
     early_access: bool = False
     registry_name: str | None = None
+    #: Clients built from this config send only reads (see :mod:`~involve_benchling.core.readonly`).
+    read_only: bool = False
     cache: CachePolicy = field(default_factory=CachePolicy)
 
     def __post_init__(self) -> None:
@@ -53,7 +59,8 @@ class BenchlingConfig:
 
         Recognised variables: ``BENCHLING_BASE_URL``, ``BENCHLING_API_KEY``,
         ``BENCHLING_OAUTH_CLIENT_ID``, ``BENCHLING_OAUTH_CLIENT_SECRET``,
-        ``BENCHLING_EARLY_ACCESS``, ``BENCHLING_REGISTRY_NAME``.
+        ``BENCHLING_EARLY_ACCESS``, ``BENCHLING_REGISTRY_NAME``,
+        ``BENCHLING_READ_ONLY``.
         Keyword arguments override environment values.
         """
         env: dict[str, Any] = {
@@ -61,9 +68,9 @@ class BenchlingConfig:
             "api_key": os.getenv(f"{_ENV_PREFIX}API_KEY") or None,
             "oauth_client_id": os.getenv(f"{_ENV_PREFIX}OAUTH_CLIENT_ID") or None,
             "oauth_client_secret": os.getenv(f"{_ENV_PREFIX}OAUTH_CLIENT_SECRET") or None,
-            "early_access": os.getenv(f"{_ENV_PREFIX}EARLY_ACCESS", "").lower()
-            in ("1", "true", "yes"),
+            "early_access": _env_flag("EARLY_ACCESS"),
             "registry_name": os.getenv(f"{_ENV_PREFIX}REGISTRY_NAME") or None,
+            "read_only": _env_flag("READ_ONLY"),
         }
         env.update(overrides)
         return cls(**env)

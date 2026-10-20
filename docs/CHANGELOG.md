@@ -2,6 +2,12 @@
 
 ## 0.1.0 (unreleased)
 
+- `core`: read-only clients. `BenchlingConfig(read_only=True)` (or
+  `BENCHLING_READ_ONLY=1`) makes `connect()` / `connect_async()` build the
+  SDK on an `httpx` transport that sends only `GET` / `HEAD` / `OPTIONS`
+  and the OAuth token exchange. Anything else raises
+  `ReadOnlyViolationError` before it leaves the process.
+
 Initial scaffold.
 
 - `core`: `BenchlingConfig` (API key / OAuth, env loading) and

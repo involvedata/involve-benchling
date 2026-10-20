@@ -28,6 +28,7 @@ from .errors import (
     ConfigError,
     InvolveBenchlingError,
     NotFoundError,
+    ReadOnlyViolationError,
 )
 from .version import __version__
 
@@ -40,6 +41,7 @@ __all__ = [
     "ConfigError",
     "InvolveBenchlingError",
     "NotFoundError",
+    "ReadOnlyViolationError",
     "__version__",
     "connect",
     "connect_async",

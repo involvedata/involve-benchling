@@ -37,3 +37,12 @@ class AmbiguousError(InvolveBenchlingError):
 
 class CacheError(InvolveBenchlingError):
     """Raised when a cache backend fails irrecoverably."""
+
+
+class ReadOnlyViolationError(InvolveBenchlingError):
+    """Raised when a read-only client attempts a request that could change data."""
+
+    def __init__(self, method: str, url: str) -> None:
+        self.method = method
+        self.url = url
+        super().__init__(f"Read-only client blocked {method} {url}")
