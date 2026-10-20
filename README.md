@@ -111,6 +111,9 @@ def test_my_workflow(benchling, benchling_tracker):
 
 ## Roadmap
 
+- `config` — configuration as code: export, plan and apply tenant configuration from
+  YAML state files. Design: [`docs/design/config-as-code.md`](docs/design/config-as-code.md).
+
 - `tools.discovery` — tenant environment discovery: schemas, dropdowns,
   relationships; ERD and documentation generation.
 - `tools.entry_search` — entry search with automatic user/project
