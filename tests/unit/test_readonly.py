@@ -16,8 +16,12 @@ TOKEN = {"access_token": "tok", "expires_in": 3600, "token_type": "Bearer"}
 REGISTRIES = {"items": [], "nextToken": None}
 SEARCH = {
     "hits": [],
-    "metadata": {"queryId": "q", "searchedObjectTypes": [], "totalHits": 0},
-    "nextToken": None,
+    "metadata": {
+        "queryId": "q",
+        "searchedObjectTypes": [],
+        "totalHits": {"relation": "eq", "value": 0},
+    },
+    "nextToken": "",
 }
 
 
