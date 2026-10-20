@@ -14,11 +14,18 @@ from tests.fixtures.config import BASE_URL
 
 TOKEN = {"access_token": "tok", "expires_in": 3600, "token_type": "Bearer"}
 REGISTRIES = {"items": [], "nextToken": None}
+SEARCH = {
+    "hits": [],
+    "metadata": {"queryId": "q", "searchedObjectTypes": [], "totalHits": 0},
+    "nextToken": None,
+}
 
 
 def _ok(request: httpx.Request) -> httpx.Response:
     if request.url.path == "/oauth/token":
         return httpx.Response(200, json=TOKEN)
+    if request.url.path == "/api/v3/search":
+        return httpx.Response(200, json=SEARCH)
     return httpx.Response(200, json=REGISTRIES)
 
 
@@ -67,6 +74,30 @@ def test_token_exchange_allowed():
 def test_token_exemption_is_exact(url):
     with pytest.raises(ReadOnlyViolationError):
         _client().post(url)
+
+
+def test_search_allowed():
+    assert _client().post(f"{BASE_URL}/api/v3/search").status_code == 200
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "api/v3/search/items",
+        "api/v3/search:export",
+        "api/v3/audit-log:export",
+        "api/v3/bulk-export",
+    ],
+)
+def test_only_exact_read_posts_allowed(path):
+    with pytest.raises(ReadOnlyViolationError):
+        _client().post(f"{BASE_URL}/{path}")
+
+
+def test_connect_read_only_allows_sdk_search(sent):
+    config = BenchlingConfig(base_url=BASE_URL, api_key="sk_test", read_only=True)
+    connect(config).search.search_sync_custom(query="plasmid")
+    assert [(r.method, r.url.path) for r in sent] == [("POST", "/api/v3/search")]
 
 
 def test_token_exemption_ignores_query():

@@ -1,9 +1,13 @@
 """Read-only enforcement at the HTTP transport.
 
-A read-only client sends only ``GET``, ``HEAD`` and ``OPTIONS`` requests.
-The one exception is the OAuth token exchange: a ``POST`` to the tenant's
-``/oauth/token`` that issues a credential and changes no tenant data. Any
-other request raises :class:`~involve_benchling.errors.ReadOnlyViolationError`
+A read-only client sends only ``GET``, ``HEAD`` and ``OPTIONS`` requests,
+plus ``POST`` to a short list of endpoints that read without changing
+tenant data (:data:`READ_POSTS`):
+
+- ``/oauth/token`` issues a credential.
+- ``/api/v3/search`` runs a search query.
+
+Any other request raises :class:`~involve_benchling.errors.ReadOnlyViolationError`
 before it leaves the process.
 
 The check sits below every SDK method, so it covers raw-response calls and
@@ -22,6 +26,7 @@ import httpx
 from ..errors import ReadOnlyViolationError
 
 __all__ = [
+    "READ_POSTS",
     "SAFE_METHODS",
     "AsyncReadOnlyTransport",
     "ReadOnlyTransport",
@@ -33,30 +38,41 @@ __all__ = [
 #: HTTP methods a read-only client may send to any URL.
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
+#: Paths, relative to the tenant base URL, that accept a read-only ``POST``.
+READ_POSTS: tuple[str, ...] = ("oauth/token", "api/v3/search")
+
+
+def _url(base_url: str, path: str) -> httpx.URL:
+    return httpx.URL(f"{base_url.rstrip('/')}/{path}")
+
 
 def token_url(base_url: str) -> httpx.URL:
     """The OAuth token endpoint the SDK posts to for ``base_url``."""
-    return httpx.URL(f"{base_url.rstrip('/')}/oauth/token")
+    return _url(base_url, "oauth/token")
 
 
-def _check(request: httpx.Request, allowed_post: httpx.URL) -> None:
+def _check(request: httpx.Request, read_posts: frozenset[httpx.URL]) -> None:
     if request.method in SAFE_METHODS:
         return
     url = request.url.copy_with(query=None, fragment=None)
-    if request.method == "POST" and url == allowed_post:
+    if request.method == "POST" and url in read_posts:
         return
     raise ReadOnlyViolationError(request.method, str(url))
+
+
+def _read_posts(base_url: str) -> frozenset[httpx.URL]:
+    return frozenset(_url(base_url, path) for path in READ_POSTS)
 
 
 class ReadOnlyTransport(httpx.BaseTransport):
     """Sync transport that rejects every request a read-only client must not send."""
 
     def __init__(self, base_url: str, inner: httpx.BaseTransport | None = None) -> None:
-        self._token_url = token_url(base_url)
+        self._read_posts = _read_posts(base_url)
         self._inner = inner or httpx.HTTPTransport()
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
-        _check(request, self._token_url)
+        _check(request, self._read_posts)
         return self._inner.handle_request(request)
 
     def close(self) -> None:
@@ -67,11 +83,11 @@ class AsyncReadOnlyTransport(httpx.AsyncBaseTransport):
     """Async counterpart of :class:`ReadOnlyTransport`."""
 
     def __init__(self, base_url: str, inner: httpx.AsyncBaseTransport | None = None) -> None:
-        self._token_url = token_url(base_url)
+        self._read_posts = _read_posts(base_url)
         self._inner = inner or httpx.AsyncHTTPTransport()
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        _check(request, self._token_url)
+        _check(request, self._read_posts)
         return await self._inner.handle_async_request(request)
 
     async def aclose(self) -> None:
