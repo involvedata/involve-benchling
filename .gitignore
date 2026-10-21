@@ -16,3 +16,4 @@ htmlcov/
 .benchling-cache/
 CLAUDE.local.md
 .claude/settings.local.json
+.idea/
