@@ -6,7 +6,7 @@ A thin, composable layer over [`benchling-v3-sdk-python`](https://pypi.org/proje
 — it never hides the SDK. You keep Benchling's typed models, pagination,
 and full API surface; this library adds what's missing around them.
 
-> **Status: alpha.** The API may change before 1.0. See the [changelog](docs/CHANGELOG.md).
+> **Status: alpha.** The API may change before 1.0. See the [changelog](https://github.com/involvedata/involve-benchling/blob/main/docs/CHANGELOG.md).
 
 involve-benchling is an independent project. It is not affiliated with or endorsed by
 Benchling, Inc.
@@ -129,7 +129,7 @@ def test_my_workflow(benchling, benchling_tracker):
 ## Roadmap
 
 - `config` — configuration as code: export, plan and apply tenant configuration from
-  YAML state files. Design: [`docs/design/config-as-code.md`](docs/design/config-as-code.md).
+  YAML state files. Design: [`docs/design/config-as-code.md`](https://github.com/involvedata/involve-benchling/blob/main/docs/design/config-as-code.md).
 - `tools.discovery` — tenant environment discovery: schemas, dropdowns,
   relationships; ERD and documentation generation.
 - `tools.entry_search` — entry search with automatic user/project
@@ -146,7 +146,7 @@ make lint type test
 ```
 
 Integration tests need a tenant. Copy `.test.env.template` to `.test.env`,
-fill it in, then run `pytest -m integration`. See [CONTRIBUTING.md](CONTRIBUTING.md)
+fill it in, then run `pytest -m integration`. See [CONTRIBUTING.md](https://github.com/involvedata/involve-benchling/blob/main/CONTRIBUTING.md)
 for the full workflow.
 
 ## License
