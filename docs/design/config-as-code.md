@@ -4,14 +4,13 @@
 |---|---|
 | Status | Draft, for review |
 | Date | 2026-10-20 |
-| Owner | Involve Data engineering |
-| Code homes | `involve-benchling` (`involve_benchling.config`), new repo `benchling-config` (CLI), one private repo per client |
-| Related | [benchling-tenant-inspector](https://github.com/involvedata/benchling-tenant-inspector) (read-only), [Liminal ORM](https://github.com/dynotx/liminal-orm) (prior art) |
+| Module | `involve_benchling.config`, with a `benchling-config` CLI behind the `config` extra |
+| Prior art | [Liminal ORM](https://github.com/dynotx/liminal-orm) |
 
 ## Summary
 
-Client tenant configuration (schemas, fields, dropdowns and so on) lives in YAML state files
-in a git repository per client. A CLI built on involve-benchling has three main commands:
+A Benchling tenant's configuration (schemas, fields, dropdowns and so on) lives in YAML state
+files in a git repository. A CLI built on involve-benchling has three main commands:
 - **`export`** reads a tenant into state files.
 - **`plan`** compares state files with a live tenant and lists the changes needed.
 - **`apply`** makes a reviewed plan's changes through the Benchling V3 API.
@@ -29,12 +28,11 @@ from dev to test to prod.
   - review before a change lands
   - the same change applied to dev, test and prod
   - detection of changes made by hand
-- The tenant inspector already reads all of this configuration through the V3 API, so the read
-  side is largely built.
+- The V3 API can read all of this configuration and write most of it.
 
 ## Goals
 
-- Tenant configuration reviewable and versioned in git, one repo per client.
+- Tenant configuration reviewable and versioned in git.
 - Bootstrap any existing tenant with no hand-written files.
 - Show drift: anything changed in the tenant that git doesn't know about.
 - Apply changes safely, in dependency order, with destructive changes opt-in.
@@ -46,34 +44,30 @@ from dev to test to prod.
 - Replacing Benchling's UI for exploratory configuration in dev.
 - Anything the V3 API cannot write (see [API coverage](#api-coverage)). Those changes appear in
   plans as manual steps.
-- Sharing the config repos or credentials across clients.
 
 ## Architecture
 
 | Layer | Home | Responsibility | Credentials |
 |---|---|---|---|
-| Mechanics | `involve-benchling`, module `involve_benchling.config` | Config model, export, plan, apply | Takes a client from its caller |
-| Tool | New repo `benchling-config` | CLI, plan files, safety checks, CI workflow templates, client repo template | None of its own |
-| Client config | `<client>-benchling-config` (private, one per client) | State files, environment definitions, ID maps, CI | Admin app secrets, in CI only |
-| Inspector | `benchling-tenant-inspector` (unchanged) | Uses `export` for snapshots and `plan` for drift reports, never `apply` | Read-only app |
+| Mechanics | `involve_benchling.config` | Config model, export, plan, apply | Takes a client from its caller |
+| CLI | `benchling-config` entry point (`involve-benchling[config]`) | Commands, plan files, safety checks | Read-only app for export and plan; admin app for apply |
+| Config repo | Owned by the user, one per Benchling organization | State files, environment definitions, ID maps, CI | Admin app secrets, in CI only |
 
 ```
-involve-benchling            library: model, export, plan, apply
-      ▲            ▲
-      │            │
-benchling-config   benchling-tenant-inspector
-(CLI, writes)      (skill, read-only)
-      ▲
-      │
-<client>-benchling-config    state files + CI, one per client
+involve_benchling.config     library: model, export, plan, apply
+          ▲
+          │
+benchling-config CLI         commands, plan files, safety checks
+          ▲
+          │
+config repo                  state files + CI
 ```
 
-**Why the library holds the mechanics:**
-- Export and plan are pure reads, and the inspector needs them too.
+- Export and plan are pure reads, so other read-only tools (audits, documentation generators)
+  can call them without the CLI.
 - Keeping apply beside them means the model and the API mapping are defined once.
-
-**Why the CLI is its own repo:** it keeps write workflows and admin credentials away from
-the read-only inspector.
+- The `config` extra holds the CLI's dependencies (YAML, a CLI framework), so the core install
+  stays small.
 
 ### Library module
 
@@ -83,7 +77,8 @@ involve_benchling/config/
 ├── export.py     # live tenant -> model -> YAML
 ├── plan.py       # desired model vs live tenant -> ordered list of operations
 ├── apply.py      # execute a plan through the SDK
-└── idmap.py      # system name <-> tenant ID, per environment
+├── idmap.py      # system name <-> tenant ID, per environment
+└── cli.py        # benchling-config entry point
 ```
 
 - `apply` refuses a read-only client.
@@ -91,10 +86,10 @@ involve_benchling/config/
 
 ## State files
 
-### Layout of a client repo
+### Layout of a config repo
 
 ```
-<client>-benchling-config/
+benchling-config/
 ├── config/                         # desired configuration (identical across environments)
 │   ├── dropdowns/<registry>/<name>.yaml
 │   ├── fieldsets/<system_name>.yaml
@@ -112,7 +107,7 @@ involve_benchling/config/
 │   ├── test.json
 │   └── prod.json
 ├── plans/                          # git-ignored; plan files awaiting apply
-└── .github/workflows/              # from the benchling-config template
+└── .github/workflows/              # CI: plan on pull requests, apply on merge and tags
 ```
 
 ### Example
@@ -179,7 +174,7 @@ validation_rules: []
 ### export
 
 - Reads a tenant through a read-only client and writes `config/` and `ids/<env>.json`.
-- Bootstraps a new client repo from an existing tenant.
+- Bootstraps a new config repo from an existing tenant.
 - Repeatable at any time. A non-empty `git diff` after export means the tenant changed outside git.
 
 ### plan
@@ -260,7 +255,7 @@ round-tripped.
 - **Credentials:**
   - Each environment has its own Benchling App with admin rights to configuration, and nothing
     more than apply needs.
-  - Secrets live only in the client repo's CI secrets, never on laptops or in state files.
+  - Secrets live only in the config repo's CI secrets, never on laptops or in state files.
   - Export and plan use a separate read-only app.
 - **Read-only by default:**
   - The library's apply refuses read-only clients.
@@ -280,7 +275,7 @@ round-tripped.
 |---|---|---|
 | Unit | Model validation, YAML round-trip, plan diffing, operation ordering, destructive classification | Fakes; no tenant |
 | Round-trip | Export, then plan against the same tenant, must produce an empty plan | Every supported object type, on the sandbox |
-| Integration | Apply additive, modifying and destructive plans, then export and compare | Involve demo tenant (`involvedata`) only, never a client tenant |
+| Integration | Apply additive, modifying and destructive plans, then export and compare | A dedicated sandbox tenant, never one holding real data |
 | Drift | Make a change in the UI and confirm plan reports it | Sandbox |
 
 The empty round-trip plan is the release gate for each object type. An object type is
@@ -290,11 +285,11 @@ supported only when its round-trip is clean.
 
 | Phase | Delivers | Writes? | Exit criteria |
 |---|---|---|---|
-| 1. Export | `config.model`, `config.export`; client repo template; inspector snapshots | No | Deterministic export of entity, result and entry schemas, dropdowns and units from three tenants; re-export produces no diff |
-| 2. Plan | `config.plan`; drift report in CI and the inspector | No | Round-trip plans empty for all phase-1 types; a hand-made UI change shows up |
-| 3. Apply (additive) | `config.apply` for create and add operations; the CLI | Yes, sandbox | Additive plans apply on the demo tenant and re-plan empty |
+| 1. Export | `config.model`, `config.export`; config repo template | No | Deterministic export of entity, result and entry schemas, dropdowns and units from at least three tenants; re-export produces no diff |
+| 2. Plan | `config.plan`; drift report in CI | No | Round-trip plans empty for all phase-1 types; a hand-made UI change shows up |
+| 3. Apply (additive) | `config.apply` for create and add operations; the CLI | Yes, sandbox | Additive plans apply on the sandbox and re-plan empty |
 | 4. Modify and destroy | Modifying and destructive operations, `renamed_from` | Yes, sandbox | Field type change and rename scenarios pass on the sandbox |
-| 5. Promote | CI templates for dev → test → prod | Yes | One change set promoted across a client's three environments |
+| 5. Promote | CI templates for dev → test → prod | Yes | One change set promoted across three environments |
 
 Phases 1 and 2 carry no write risk and are useful on their own.
 
@@ -314,7 +309,7 @@ result schemas and dropdowns.
 | Cost | Adopt and learn | Build phases 1–5 |
 
 **Decision point before phase 3:**
-1. Run Liminal's `generate-files` and a no-op migration against the demo tenant.
+1. Run Liminal's `generate-files` and a no-op migration against the sandbox.
 2. Adopt Liminal's apply if it round-trips cleanly and the dependencies are acceptable, and
    keep this design's export, plan and drift as the review layer.
 3. Otherwise build phase 3.
@@ -327,15 +322,13 @@ result schemas and dropdowns.
 | A `set_field_definitions` call drops fields | Apply always sends the full list built from the live tenant plus the plan; a round-trip test covers it |
 | People keep editing in the UI, so git drifts | Scheduled drift plans; the team agrees which environments allow UI edits (dev only) |
 | Admin credentials leak | CI-only secrets, per-environment apps, rotation runbook |
-| System-name changes break warehouse SQL and Insights dashboards | Plan flags any `system_name` change; the inspector's dashboard check finds SQL that references it |
+| System-name changes break warehouse SQL and Insights dashboards | Plan flags any `system_name` change and lists the warehouse tables and columns it renames |
 | One schema's partial apply leaves an inconsistent state | Stop on first failure, re-plan to see what remains, never auto-retry destructive operations |
 
 ## Open questions
 
 1. Fieldset field lists come back empty. Is that a permission, an API bug, or by design? Ask Benchling.
-2. Do clients accept an Involve-held admin app per environment, or must apply run in the
-   client's own CI?
-3. Policies and collaborations are writable. Does access-as-code belong in this tool, or in a
+2. Policies and collaborations are writable. Does access-as-code belong in this tool, or in a
    separate one with its own review?
-4. Should state files carry descriptions and tooltips, which are settings, or leave them in the UI?
-5. YAML or a typed Python DSL for state files? This doc assumes YAML for reviewability.
+3. Should state files carry descriptions and tooltips, which are settings, or leave them in the UI?
+4. YAML or a typed Python DSL for state files? This doc assumes YAML for reviewability.

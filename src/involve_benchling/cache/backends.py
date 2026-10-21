@@ -1,15 +1,20 @@
 """Cache backends.
 
-Values are stored as JSON documents -- never pickle -- so a shared disk
-cache cannot be used as a code-execution vector. Pydantic models from the
-Benchling SDK are serialised with ``model_dump_json`` and rehydrated with
-``model_validate_json``.
+Values are stored as JSON documents, never pickle. Pydantic models from
+the Benchling SDK are serialised with ``model_dump_json`` and rehydrated
+with ``model_validate_json``.
+
+The disk tier creates its directory and files readable only by the current
+user, because cached responses can hold sensitive tenant data.
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
+import os
+import tempfile
 import time
 from collections import OrderedDict
 from pathlib import Path
@@ -73,14 +78,19 @@ class MemoryBackend:
 class DiskBackend:
     """Persistent cache: one JSON file per key, shared across processes.
 
-    Writes are atomic (write-to-temp + rename). Corrupt or unreadable
-    entries are treated as misses, never as errors.
+    Writes are atomic (write to a unique temp file, then rename). Corrupt or
+    unreadable entries are treated as misses, never as errors. The directory
+    holds a ``.gitignore`` so a cache inside a repository is never committed.
     """
 
     def __init__(self, directory: Path) -> None:
         self._dir = directory
         self._index_dir = directory / "entries"
-        self._index_dir.mkdir(parents=True, exist_ok=True)
+        self._index_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        gitignore = directory / ".gitignore"
+        if not gitignore.exists():
+            with contextlib.suppress(OSError):
+                gitignore.write_text("*\n")
 
     def _path(self, key: str) -> Path:
         digest = hashlib.sha256(key.encode()).hexdigest()[:40]
@@ -99,9 +109,15 @@ class DiskBackend:
     def set(self, key: str, value: Any, ttl: float) -> None:
         path = self._path(key)
         doc = {"key": key, "expires_at": time.time() + ttl, "value": value}
-        tmp = path.with_suffix(".tmp")
         try:
-            tmp.write_text(json.dumps(doc))
+            # mkstemp creates the file with mode 0600.
+            fd, tmp_name = tempfile.mkstemp(dir=self._index_dir, suffix=".tmp")
+        except OSError:
+            return
+        tmp = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(json.dumps(doc))
             tmp.replace(path)
         except OSError:
             # Cache failures must never break the caller.

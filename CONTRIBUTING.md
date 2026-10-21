@@ -1,27 +1,53 @@
 # Contributing
 
-(Private alpha — this document will be expanded before the public release.)
+Thanks for helping. Bug reports, fixes and new helpers are all welcome. For a
+larger change, open an issue first so we can agree on the shape before you
+write it.
 
 ## Ground rules
 
-- **Pass through SDK models** — never introduce wrapper dataclasses for
+- **Pass through SDK models.** Never introduce wrapper dataclasses for
   Benchling resources.
-- **Generic over bespoke** — prefer helpers that work on any resource to
+- **Generic over bespoke.** Prefer helpers that work on any resource to
   per-resource code.
 - **Every public function is typed and documented.** CI runs mypy
   `--strict` and ruff.
-- **Unit tests must run with zero credentials.** Anything touching a real
-  tenant is `@pytest.mark.integration`.
+- **Unit tests run with zero credentials.** Anything touching a real
+  tenant is marked `@pytest.mark.integration`.
+- **Optional dependencies stay optional.** Import them inside the function
+  that needs them and declare them as an extra in `pyproject.toml`.
 
-## Workflow
+## Setup
 
 ```bash
-make install     # editable install with dev extras
-make lint type test
+python -m venv venv && source venv/bin/activate
+make install          # pip install -e ".[dev]"
+pre-commit install    # optional: ruff and file checks on every commit
 ```
 
-PRs need: passing CI, a test for every behaviour change, and a changelog
-entry under `docs/CHANGELOG.md`.
+## Checks
+
+```bash
+make lint             # ruff check and ruff format --check
+make type             # mypy --strict
+make test             # unit tests, no credentials needed
+make test-all         # unit and integration tests
+```
+
+Integration tests need a tenant. Copy `.test.env.template` to `.test.env`
+and fill it in. Use a sandbox tenant, because the tests create and archive
+resources.
+
+## Pull requests
+
+A pull request needs:
+
+- passing CI
+- a test for every behaviour change
+- an entry under `docs/CHANGELOG.md`
+- docstrings for any new public function
+
+Keep each pull request to one change.
 
 ## Test fixtures
 
@@ -43,3 +69,7 @@ tests.
 These fixtures are private to this repo. The shipped
 `involve_benchling.testing` plugin provides the live-tenant fixtures
 (`benchling_config`, `benchling`, `benchling_tracker`) for integration tests.
+
+## Security
+
+Report vulnerabilities privately, as described in [SECURITY.md](SECURITY.md).

@@ -6,7 +6,7 @@ every resource -- no per-resource service classes::
 
     from involve_benchling import resolve
 
-    plasmid = resolve.get_by_name(benchling.custom_entity, "pIVD-001")
+    plasmid = resolve.get_by_name(benchling.custom_entity, "pEX-001")
     schema = resolve.find_one(benchling.entity_schema, name_any_of=["Plasmid"])
 
 Lookups raise :class:`~involve_benchling.errors.NotFoundError` or

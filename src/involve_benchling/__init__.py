@@ -16,7 +16,7 @@ Quick start::
 
     config = BenchlingConfig.from_env()
     benchling = connect(config)
-    plasmid = resolve.get_by_name(benchling.custom_entity, "pIVD-001")
+    plasmid = resolve.get_by_name(benchling.custom_entity, "pEX-001")
 """
 
 from . import resolve

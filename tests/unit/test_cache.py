@@ -1,5 +1,9 @@
+import json
+import stat
+
 import pytest
 from benchling_v3_sdk.types.custom_entity import CustomEntity
+from pydantic import BaseModel
 
 from involve_benchling.cache import (
     MISSING,
@@ -12,6 +16,14 @@ from involve_benchling.cache import (
 
 def _never():
     pytest.fail("should have been served from the cache")
+
+
+class Note(BaseModel):
+    text: str
+
+
+def _mode(path):
+    return stat.S_IMODE(path.stat().st_mode)
 
 
 class TestMemoryBackend:
@@ -67,6 +79,15 @@ class TestDiskBackend:
             path.write_text("{corrupt")
         assert disk_backend.get("k") is MISSING
 
+    def test_entries_private_to_user(self, disk_backend, cache_dir):
+        disk_backend.set("k", "v", ttl=60)
+        entries = cache_dir / "entries"
+        assert _mode(entries) == 0o700
+        assert [_mode(p) for p in entries.iterdir()] == [0o600]
+
+    def test_directory_is_gitignored(self, disk_backend, cache_dir):
+        assert (cache_dir / ".gitignore").read_text() == "*\n"
+
     def test_invalidate_prefix(self, disk_backend):
         disk_backend.set("schema:1", 1, ttl=60)
         disk_backend.set("entity:1", 2, ttl=60)
@@ -111,6 +132,23 @@ class TestBenchlingCache:
     def test_sdk_model_list_roundtrip(self, disk_cache, disk_backend, plasmids):
         disk_cache.get_or_fetch("es", fetch=lambda: plasmids)
         assert BenchlingCache(disk_backend).get_or_fetch("es", fetch=_never) == plasmids
+
+    def test_custom_model_needs_model_argument(self, disk_cache, disk_backend):
+        disk_cache.get_or_fetch("n", fetch=lambda: Note(text="hi"))
+        restored = BenchlingCache(disk_backend).get_or_fetch("n", model=Note, fetch=_never)
+        assert restored == Note(text="hi")
+        refetched = BenchlingCache(disk_backend).get_or_fetch("n", fetch=lambda: "fresh")
+        assert refetched == "fresh"
+
+    def test_untrusted_model_ref_is_miss(self, disk_cache, disk_backend, cache_dir):
+        disk_cache.get_or_fetch("k", fetch=lambda: "v")
+        (entry,) = (cache_dir / "entries").glob("*.json")
+        doc = json.loads(entry.read_text())
+        doc["value"] = {"__model__": "antigravity:Fly", "data": "{}"}
+        entry.write_text(json.dumps(doc))
+        cache = BenchlingCache(disk_backend)
+        assert cache.get_or_fetch("k", fetch=lambda: "fresh") == "fresh"
+        assert cache.misses == 1
 
     def test_category_ttl_applies(self, memory_backend, clock):
         cache = BenchlingCache(memory_backend, CachePolicy(ttls={"schema": 10}))

@@ -1,6 +1,6 @@
 """Cross-resource workflow tools.
 
-Planned (see ROADMAP in README):
+Planned (see the roadmap in the README):
 
 - ``discovery``: tenant environment discovery -- schemas, dropdowns,
   relationships -- with ERD and documentation generation.

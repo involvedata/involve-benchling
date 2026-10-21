@@ -5,8 +5,8 @@ involve-benchling never hides the SDK: :func:`connect` returns the plain
 accepts SDK clients and resources directly.
 
 When ``config.read_only`` is set, the client is built on an ``httpx``
-transport that blocks every request except reads and the OAuth token
-exchange (see :mod:`~involve_benchling.core.readonly`).
+transport that blocks every request that could change tenant data (see
+:mod:`~involve_benchling.core.readonly`).
 """
 
 from __future__ import annotations

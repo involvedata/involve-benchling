@@ -6,25 +6,28 @@ A thin, composable layer over [`benchling-v3-sdk-python`](https://pypi.org/proje
 — it never hides the SDK. You keep Benchling's typed models, pagination,
 and full API surface; this library adds what's missing around them.
 
-> **Status: private alpha.** APIs will change before a public release.
+> **Status: alpha.** The API may change before 1.0. See the [changelog](docs/CHANGELOG.md).
+
+involve-benchling is an independent project. It is not affiliated with or endorsed by
+Benchling, Inc.
 
 ## Why
 
-The Benchling V3 SDK is excellent at being an API client. It is not a
-toolkit. Teams integrating Benchling all end up rebuilding the same four
-things:
+The Benchling V3 SDK is a complete API client. Teams that build on it tend to
+rebuild the same pieces around it:
 
 | Pillar | Module | What it gives you |
 |---|---|---|
 | **Caching** | `involve_benchling.cache` | Tiered (memory + disk, shared across processes), pickle-free JSON serialisation of SDK models, per-category TTLs. Reference data (schemas, dropdowns, registries) goes from ~500ms to <1ms. |
 | **Resolution** | `involve_benchling.resolve` | Generic `get_by_name` / `find_one` over *any* V3 resource, with typed `NotFoundError` / `AmbiguousError` instead of silent first-match. |
 | **DataFrames** | `involve_benchling.dataframes` | Explicit `to_dataframe()` that expands V3 `schemaFields` into one typed, named column per field. Optional extra. |
+| **Read-only clients** | `involve_benchling.core.readonly` | A client that cannot change tenant data, enforced in the HTTP transport below every SDK method. |
 | **Testing** | `involve_benchling.testing` | pytest plugin: env-based config/client fixtures and a `benchling_tracker` that cleans up every resource a test created — even on failure. |
 
 ## Install
 
 ```bash
-pip install involve-benchling              # core (SDK + nothing else)
+pip install involve-benchling              # core (the SDK and its own dependencies)
 pip install "involve-benchling[pandas]"    # + dataframe support
 ```
 
@@ -41,7 +44,7 @@ for seq in benchling.dna_sequence.list(page_size=50):
     print(seq.id, seq.name)
 
 # Resolution with typed errors, over any resource:
-plasmid = resolve.get_by_name(benchling.custom_entity, "pIVD-001")
+plasmid = resolve.get_by_name(benchling.custom_entity, "pEX-001")
 schema_id = resolve.get_id_by_name(benchling.entity_schema, "Plasmid")
 
 # Caching reference data:
@@ -76,8 +79,22 @@ benchling.folder.create(name="x", parent_id="lib_1")
 
 The check sits in the `httpx` transport, below every SDK method. A
 read-only client sends only `GET`, `HEAD` and `OPTIONS`, plus `POST` to the
-OAuth token exchange and `/api/v3/search`, which read without changing data. Raw-response calls and methods added in later SDK releases
-are covered without a list of write verbs to maintain.
+OAuth token exchange and `/api/v3/search`, which read without changing data.
+Raw-response calls and methods added in later SDK releases are covered without
+a list of write verbs to maintain.
+
+### Cache storage
+
+The disk tier defaults to `.benchling-cache/` in the working directory. It
+creates the directory and its files readable only by the current user, and
+writes a `.gitignore` into it so the cache is never committed. Cached
+responses can hold sensitive data, so point `CachePolicy.directory` somewhere
+protected.
+
+The cache is keyed by `namespace` (usually the tenant URL), not by
+credential. Don't share one cache directory between credentials with
+different access, or a narrower credential can read what a broader one
+cached.
 
 ### Testing your own Benchling integrations
 
@@ -113,7 +130,6 @@ def test_my_workflow(benchling, benchling_tracker):
 
 - `config` — configuration as code: export, plan and apply tenant configuration from
   YAML state files. Design: [`docs/design/config-as-code.md`](docs/design/config-as-code.md).
-
 - `tools.discovery` — tenant environment discovery: schemas, dropdowns,
   relationships; ERD and documentation generation.
 - `tools.entry_search` — entry search with automatic user/project
@@ -129,8 +145,9 @@ make install   # pip install -e ".[dev]"
 make lint type test
 ```
 
-Integration tests need a tenant: copy `.test.env.template` to `.test.env`,
-fill it in, then `pytest -m integration`.
+Integration tests need a tenant. Copy `.test.env.template` to `.test.env`,
+fill it in, then run `pytest -m integration`. See [CONTRIBUTING.md](CONTRIBUTING.md)
+for the full workflow.
 
 ## License
 

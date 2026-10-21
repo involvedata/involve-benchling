@@ -6,7 +6,10 @@ registries, users) rarely changes but is fetched constantly. A
 lookups.
 
 Values round-trip through JSON (never pickle). Benchling SDK models are
-Pydantic models and are serialised losslessly::
+Pydantic models and are serialised losslessly. A cached model is rebuilt
+only from a ``benchling_v3_sdk`` class or the ``model`` passed to
+:meth:`BenchlingCache.get_or_fetch`, so a tampered cache file cannot make
+the cache import arbitrary modules::
 
     from involve_benchling.cache import BenchlingCache
     from benchling_v3_sdk.types.custom_entity import CustomEntity
@@ -59,14 +62,15 @@ def _encode(value: Any) -> Any:
     return {"__json__": value}
 
 
-def _decode(doc: Any) -> Any:
+def _decode(doc: Any, model: type[BaseModel] | None = None) -> Any:
     if not isinstance(doc, dict):
         return doc
     if "__model__" in doc:
-        model_cls = _import_model(doc["__model__"])
+        ref = doc["__model__"]
+        model_cls = model if model and ref == _model_ref(model) else _import_model(ref)
         return model_cls.model_validate_json(doc["data"])
     if "__list__" in doc:
-        return [_decode(item) for item in doc["__list__"]]
+        return [_decode(item, model) for item in doc["__list__"]]
     return doc.get("__json__")
 
 
@@ -74,8 +78,14 @@ def _model_ref(cls: type[BaseModel]) -> str:
     return f"{cls.__module__}:{cls.__qualname__}"
 
 
+#: Packages whose models the cache imports by name when rehydrating.
+_TRUSTED_MODEL_PACKAGES = ("benchling_v3_sdk",)
+
+
 def _import_model(ref: str) -> type[BaseModel]:
     module_name, _, qualname = ref.partition(":")
+    if module_name.partition(".")[0] not in _TRUSTED_MODEL_PACKAGES:
+        raise TypeError(f"{ref} is not a Benchling SDK model; pass it as model=")
     obj: Any = importlib.import_module(module_name)
     for part in qualname.split("."):
         obj = getattr(obj, part)
@@ -123,16 +133,22 @@ class BenchlingCache:
     ) -> Any:
         """Return the cached value for ``key``, calling ``fetch`` on a miss.
 
-        ``ttl`` overrides the policy TTL for ``category``. ``model`` is
-        accepted for documentation/typing symmetry; rehydration is driven
-        by metadata stored alongside the value.
+        ``ttl`` overrides the policy TTL for ``category``. ``model`` names a
+        Pydantic class outside ``benchling_v3_sdk`` that the cached value may
+        hold; SDK models need no ``model``. An entry that cannot be decoded
+        counts as a miss.
         """
         if not self._policy.enabled:
             return fetch()
         doc = self._backend.get(key)
         if doc is not MISSING:
-            self.hits += 1
-            return _decode(doc)
+            try:
+                value = _decode(doc, model)
+            except (ImportError, AttributeError, TypeError, ValueError):
+                pass
+            else:
+                self.hits += 1
+                return value
         self.misses += 1
         value = fetch()
         resolved_ttl = ttl if ttl is not None else self._policy.ttl_for(category)

@@ -59,7 +59,7 @@ def plasmids() -> list[CustomEntity]:
     return [
         b.custom_entity(
             "bfi_001",
-            "pIVD-001",
+            "pEX-001",
             schema_id=PLASMID_SCHEMA_ID,
             fields={
                 CONCENTRATION: b.decimal_value("5.25"),
@@ -71,11 +71,11 @@ def plasmids() -> list[CustomEntity]:
         ),
         b.custom_entity(
             "bfi_002",
-            "pIVD-002",
+            "pEX-002",
             schema_id=PLASMID_SCHEMA_ID,
             fields={CONCENTRATION: b.decimal_value("1.5"), NOTES: None},
         ),
-        b.custom_entity("bfi_003", "pivd-002", schema_id=PLASMID_SCHEMA_ID),
+        b.custom_entity("bfi_003", "pex-002", schema_id=PLASMID_SCHEMA_ID),
         b.custom_entity("bfi_900", "Strain-900", schema_id=OTHER_SCHEMA_ID),
     ]
 

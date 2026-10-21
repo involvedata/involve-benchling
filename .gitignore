@@ -14,3 +14,5 @@ htmlcov/
 .env
 .DS_Store
 .benchling-cache/
+CLAUDE.local.md
+.claude/settings.local.json
