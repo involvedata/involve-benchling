@@ -49,6 +49,19 @@ A pull request needs:
 
 Keep each pull request to one change.
 
+## Releasing
+
+Maintainers release from GitHub. PyPI trusts the `Release` workflow, so
+nobody holds an upload token.
+
+1. Set the version in `src/involve_benchling/version.py`.
+2. Move the changelog entries under a heading for that version.
+3. Merge to `main`.
+4. Create a GitHub release with the tag `v<version>`, for example `v0.1.0`.
+5. Approve the `pypi` deployment when the workflow asks.
+
+The workflow fails before publishing if the tag doesn't match the version.
+
 ## Test fixtures
 
 Shared fixtures live in `tests/fixtures/` and are registered by
