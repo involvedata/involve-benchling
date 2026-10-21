@@ -1,9 +1,8 @@
 """Caching for Benchling API responses.
 
-The official SDK does no caching; reference data (schemas, dropdowns,
-registries, users) rarely changes but is fetched constantly. A
-:class:`BenchlingCache` turns those ~500ms calls into sub-millisecond
-lookups.
+Reference data (schemas, dropdowns, registries, users) changes rarely but
+is often read many times. A :class:`BenchlingCache` keeps those responses
+locally, so repeat lookups take under a millisecond.
 
 Values round-trip through JSON (never pickle). Benchling SDK models are
 Pydantic models and are serialised losslessly. A cached model is rebuilt

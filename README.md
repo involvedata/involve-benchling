@@ -1,25 +1,24 @@
 # involve-benchling
 
-**The toolkit the official Benchling SDK doesn't give you.**
+An extension of Benchling's [`benchling-v3-sdk-python`](https://pypi.org/project/benchling-v3-sdk-python/)
+for teams building integrations and analysis on Benchling.
 
-A thin, composable layer over [`benchling-v3-sdk-python`](https://pypi.org/project/benchling-v3-sdk-python/)
-— it never hides the SDK. You keep Benchling's typed models, pagination,
-and full API surface; this library adds what's missing around them.
+involve-benchling works alongside the SDK. You keep using Benchling's typed
+models, pagination and full API surface, and this library adds helpers that
+work with them.
 
 > **Status: alpha.** The API may change before 1.0. See the [changelog](https://github.com/involvedata/involve-benchling/blob/main/docs/CHANGELOG.md).
 
-involve-benchling is an independent project. It is not affiliated with or endorsed by
-Benchling, Inc.
+involve-benchling is built by [Involve Data](https://involvedata.com). We're big fans of
+Benchling and use it every day. This is an independent project, not affiliated with or
+endorsed by Benchling, Inc.
 
-## Why
+## What it adds
 
-The Benchling V3 SDK is a complete API client. Teams that build on it tend to
-rebuild the same pieces around it:
-
-| Pillar | Module | What it gives you |
+| Feature | Module | What it gives you |
 |---|---|---|
 | **Caching** | `involve_benchling.cache` | Tiered (memory + disk, shared across processes), pickle-free JSON serialisation of SDK models, per-category TTLs. Reference data (schemas, dropdowns, registries) goes from ~500ms to <1ms. |
-| **Resolution** | `involve_benchling.resolve` | Generic `get_by_name` / `find_one` over *any* V3 resource, with typed `NotFoundError` / `AmbiguousError` instead of silent first-match. |
+| **Resolution** | `involve_benchling.resolve` | Generic `get_by_name` / `find_one` over *any* V3 resource, raising `NotFoundError` or `AmbiguousError` when a name matches nothing or several items. |
 | **DataFrames** | `involve_benchling.dataframes` | Explicit `to_dataframe()` that expands V3 `schemaFields` into one typed, named column per field. Optional extra. |
 | **Read-only clients** | `involve_benchling.core.readonly` | A client that cannot change tenant data, enforced in the HTTP transport below every SDK method. |
 | **Testing** | `involve_benchling.testing` | pytest plugin: env-based config/client fixtures and a `benchling_tracker` that cleans up every resource a test created — even on failure. |

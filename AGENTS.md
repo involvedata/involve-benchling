@@ -6,10 +6,10 @@ follows.
 
 ## Project
 
-involve-benchling is a typed Python library over `benchling-v3-sdk-python`.
+involve-benchling is a typed Python extension of `benchling-v3-sdk-python`.
 It adds caching, name resolution, dataframes, read-only clients and pytest
-utilities, and it never hides the SDK. Functions accept and return SDK
-objects.
+utilities. Functions accept and return SDK objects, and users keep calling
+the SDK directly.
 
 | Path | Contents |
 |---|---|

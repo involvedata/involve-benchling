@@ -1,7 +1,7 @@
-"""involve-benchling: the toolkit the official Benchling SDK doesn't give you.
+"""involve-benchling: an extension of Benchling's V3 Python SDK.
 
-A thin, composable layer over ``benchling_v3_sdk`` -- it never hides the
-SDK. Pillars:
+Helpers that work alongside ``benchling_v3_sdk`` and accept and return its
+models:
 
 - :mod:`involve_benchling.cache` -- tiered, pickle-free response caching.
 - :mod:`involve_benchling.resolve` -- generic name->object resolution with

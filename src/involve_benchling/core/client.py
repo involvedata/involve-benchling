@@ -1,8 +1,7 @@
-"""Thin construction helpers over the official ``benchling_v3_sdk``.
+"""Construction helpers for ``benchling_v3_sdk`` clients.
 
-involve-benchling never hides the SDK: :func:`connect` returns the plain
-``benchling_v3_sdk.Benchling`` client, and every helper in this library
-accepts SDK clients and resources directly.
+:func:`connect` returns a plain ``benchling_v3_sdk.Benchling`` client, and
+every helper in this library accepts SDK clients and resources directly.
 
 When ``config.read_only`` is set, the client is built on an ``httpx``
 transport that blocks every request that could change tenant data (see
