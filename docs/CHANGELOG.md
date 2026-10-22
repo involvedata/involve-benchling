@@ -4,6 +4,28 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## 0.1.0 (2026-10-22)
+
+### Added
+
+- `core.pacing`: clients built by `connect()` / `connect_async()` cap
+  concurrent requests (`BenchlingConfig.max_concurrency`, default 4, or
+  `BENCHLING_MAX_CONCURRENCY`). After a `429` they pause every request until
+  `Retry-After` has passed, or back off exponentially with jitter up to 60 s
+  without it. Each `429` also halves the cap, which grows back by one after
+  each full cap's worth of successes. SDK retries wait out the same pause.
+  `pacer_for(client)` returns the client's `Pacer`, and each `429` is logged
+  at `WARNING`.
+- `BenchlingConfig.pacing` (default on, or `BENCHLING_PACING=0`) turns
+  pacing off.
+
+### Changed
+
+- Clients are paced by default, so at most 4 requests are in flight per
+  client unless `max_concurrency` is raised.
+- `connect()` raises `ConfigError` when `httpx_client` is passed while
+  pacing is on. Set `pacing=False` to supply your own client.
+
 ## 0.1.0a2 (2026-10-21)
 
 ### Changed
