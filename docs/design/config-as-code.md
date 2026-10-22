@@ -1,8 +1,13 @@
 # Design: Benchling configuration as code
 
+> **Superseded (2026-10-22).** Configuration as code is being built in Involve Data's
+> private `involve-benchling-config` repo, on [Liminal ORM](https://github.com/dynotx/liminal-orm),
+> not in this library. Its design replaces the YAML state files, plan and apply described
+> here, and `involve_benchling.config` will not be built. This document is kept for history.
+
 | | |
 |---|---|
-| Status | Draft, for review |
+| Status | Superseded |
 | Date | 2026-10-20 |
 | Module | `involve_benchling.config`, with a `benchling-config` CLI behind the `config` extra |
 | Prior art | [Liminal ORM](https://github.com/dynotx/liminal-orm) |
