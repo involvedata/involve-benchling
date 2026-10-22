@@ -21,7 +21,7 @@ endorsed by Benchling, Inc.
 | **Resolution** | `involve_benchling.resolve` | Generic `get_by_name` / `find_one` over *any* V3 resource, raising `NotFoundError` or `AmbiguousError` when a name matches nothing or several items. |
 | **DataFrames** | `involve_benchling.dataframes` | Explicit `to_dataframe()` that expands V3 `schemaFields` into one typed, named column per field. Optional extra. |
 | **Read-only clients** | `involve_benchling.core.readonly` | A client that cannot change tenant data, enforced in the HTTP transport below every SDK method. |
-| **Rate-limit pacing** | `involve_benchling.core.pacing` | Caps concurrent requests and pauses every request on a client after a `429`, so concurrent calls stop failing together. On by default. |
+| **Rate-limit pacing** | `involve_benchling.core.pacing` | Caps concurrent requests and their rate, pauses every request after a `429` and resends rejected requests, so large crawls stay under Benchling's rate limit. On by default. |
 | **Testing** | `involve_benchling.testing` | pytest plugin: env-based config/client fixtures and a `benchling_tracker` that cleans up every resource a test created — even on failure. |
 
 ## Install
@@ -94,14 +94,18 @@ calls keep spending the budget and fail together.
 Clients built by `connect()` and `connect_async()` are paced:
 
 - At most `max_concurrency` requests (default 4) are in flight at once.
+- Requests are spaced to a shared rate. It starts at 10 requests/s and
+  rises by 0.1 requests/s with each success, up to 20.
 - After a `429`, every request on the client waits until `Retry-After` has
   passed. Without the header, the pause doubles with each `429` in a row
   (1, 2, 4… s, with jitter) up to 60 s.
-- After a `429`, the cap also halves, down to one request. Each time a full
-  cap's worth of requests succeeds, it grows by one, back up to
-  `max_concurrency`. A pause alone isn't enough, because every request
-  resumes at once when it ends and hits the limit again.
-- The SDK still retries, and its retries wait out the same pause.
+- After a `429`, the cap and the rate both halve, down to one request and
+  0.5 requests/s. A burst of `429`s halves them once.
+- A request that gets a `429` is resent up to `max_retries` times (default
+  8), whatever its method. Benchling does nothing with a rejected request,
+  so resending a write can't duplicate it.
+- The SDK keeps its own retries (2 by default, or the `max_retries` passed
+  to `connect()`) for other errors such as `5xx`.
 
 ```python
 from involve_benchling.core import pacer_for
@@ -111,6 +115,7 @@ benchling = connect(config)
 ...
 pacer_for(benchling).throttled                         # 429s received so far
 pacer_for(benchling).limit                             # current cap
+pacer_for(benchling).rate                              # current requests/s
 ```
 
 Each `429` is also logged at `WARNING` on `involve_benchling.core.pacing`.
@@ -118,8 +123,8 @@ Each `429` is also logged at `WARNING` on `involve_benchling.core.pacing`.
 The pause belongs to one client. Share one client between threads or tasks
 that use the same credentials, because separate clients and processes can't
 see each other's pauses. Benchling also caps how many objects a tenant can
-create or update per hour. A pause can't wait that out, so the SDK raises
-once its retries run out.
+create or update per hour. Retries can't wait that out, so the call raises
+once they run out.
 
 Turn pacing off with `pacing=False` (or `BENCHLING_PACING=0`). That is also
 required to pass your own `httpx_client` to `connect()`.

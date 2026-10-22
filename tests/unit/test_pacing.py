@@ -7,7 +7,16 @@ import pytest
 
 from involve_benchling import BenchlingConfig, ConfigError, ReadOnlyViolationError, connect
 from involve_benchling.core import connect_async, pacer_for
-from involve_benchling.core.pacing import MAX_PAUSE, AsyncPacedTransport, PacedTransport, Pacer
+from involve_benchling.core.pacing import (
+    INITIAL_RATE,
+    MAX_PAUSE,
+    MAX_RATE,
+    MIN_RATE,
+    RATE_STEP,
+    AsyncPacedTransport,
+    PacedTransport,
+    Pacer,
+)
 from tests.fixtures.config import BASE_URL
 from tests.fixtures.fakes import FakeClock
 
@@ -20,6 +29,10 @@ REQUEST = httpx.Request("GET", URL)
 
 def _response(status: int, **headers: str) -> httpx.Response:
     return httpx.Response(status, headers=headers)
+
+
+def pacer_of(client: httpx.Client) -> Pacer:
+    return client._transport.pacer
 
 
 def _paced(clock: FakeClock, responses: list[httpx.Response], **kwargs) -> httpx.Client:
@@ -45,14 +58,14 @@ def test_success_sends_without_waiting(clock):
 
 
 def test_retry_after_pauses_the_next_request(clock):
-    client = _paced(clock, [httpx.Response(429, headers={"Retry-After": "2"})])
+    client = _paced(clock, [httpx.Response(429, headers={"Retry-After": "2"})], max_retries=0)
     assert client.get(URL).status_code == 429
     assert client.get(URL).status_code == 200
     assert clock.slept == [2.0]
 
 
 def test_retry_after_pauses_every_request_on_the_client(clock):
-    client = _paced(clock, [httpx.Response(429, headers={"Retry-After": "2"})])
+    client = _paced(clock, [httpx.Response(429, headers={"Retry-After": "2"})], max_retries=0)
     client.get(URL)
     clock.advance(0.5)
     client.get(f"{BASE_URL}/api/v3/folder/items")
@@ -155,6 +168,10 @@ def test_successes_grow_the_cap_back_to_the_maximum(clock):
     assert max(limits) == pacer.limit == 8
 
 
+async def _yield(seconds: float) -> None:
+    await asyncio.sleep(0)
+
+
 def _peak(pacer: Pacer, calls: int) -> int:
     """Sends ``calls`` requests from threads and returns the most in flight at once."""
     lock = threading.Lock()
@@ -173,7 +190,8 @@ def _peak(pacer: Pacer, calls: int) -> int:
             in_flight -= 1
         return httpx.Response(200)
 
-    client = httpx.Client(transport=PacedTransport(pacer, httpx.MockTransport(answer)))
+    transport = PacedTransport(pacer, httpx.MockTransport(answer), sleep=lambda _: None)
+    client = httpx.Client(transport=transport)
     threads = [threading.Thread(target=client.get, args=(URL,)) for _ in range(calls)]
     for thread in threads:
         thread.start()
@@ -206,12 +224,106 @@ def test_async_transport_caps_concurrency():
         return httpx.Response(200)
 
     async def run() -> None:
-        transport = AsyncPacedTransport(Pacer(2), httpx.MockTransport(answer))
+        transport = AsyncPacedTransport(Pacer(2), httpx.MockTransport(answer), sleep=_yield)
         async with httpx.AsyncClient(transport=transport) as client:
             await asyncio.gather(*(client.get(URL) for _ in range(6)))
 
     asyncio.run(run())
     assert peak == 2
+
+
+def test_429_halves_the_rate(clock):
+    pacer = Pacer(4, clock=clock.monotonic)
+    pacer.record(REQUEST, _response(429, **{"Retry-After": "0"}))
+    assert pacer.rate == INITIAL_RATE / 2
+
+
+def test_rate_never_drops_below_the_floor(clock):
+    pacer = Pacer(4, clock=clock.monotonic, initial_rate=MIN_RATE)
+    pacer.record(REQUEST, _response(429, **{"Retry-After": "0"}))
+    assert pacer.rate == MIN_RATE
+
+
+def test_successes_raise_the_rate_up_to_the_ceiling(clock):
+    pacer = Pacer(4, clock=clock.monotonic)
+    pacer.record(REQUEST, _response(429, **{"Retry-After": "0"}))
+    pacer.record(REQUEST, _response(200))
+    assert pacer.rate == pytest.approx(INITIAL_RATE / 2 + RATE_STEP)
+    for _ in range(500):
+        pacer.record(REQUEST, _response(200))
+    assert pacer.rate == MAX_RATE
+
+
+def test_a_burst_of_429s_halves_the_rate_once(clock):
+    pacer = Pacer(4, clock=clock.monotonic)
+    sent_at = clock.monotonic()
+    clock.advance(1)
+    for _ in range(4):
+        pacer.record(REQUEST, _response(429, **{"Retry-After": "0"}), sent_at)
+    assert pacer.rate == INITIAL_RATE / 2
+
+
+def test_requests_are_spaced_to_the_rate(clock):
+    client = _paced(clock, [])
+    for _ in range(3):
+        client.get(URL)
+    first, second = 1 / INITIAL_RATE, 1 / (INITIAL_RATE + RATE_STEP)
+    assert clock.slept == pytest.approx([first, second])
+
+
+def test_spacing_widens_after_a_429(clock):
+    client = _paced(clock, [httpx.Response(429, headers={"Retry-After": "0"})], max_retries=0)
+    client.get(URL)
+    clock.advance(1)
+    client.get(URL)
+    client.get(URL)
+    assert clock.slept == pytest.approx([2 / INITIAL_RATE])
+
+
+def test_429_is_resent_until_it_succeeds(clock):
+    rejected = [httpx.Response(429, headers={"Retry-After": "1"}) for _ in range(2)]
+    client = _paced(clock, rejected)
+    assert client.get(URL).status_code == 200
+    assert pacer_of(client).throttled == 2
+    assert sum(clock.slept) >= 2.0
+
+
+def test_429_retries_stop_at_max_retries(clock):
+    rejected = [httpx.Response(429, headers={"Retry-After": "0"}) for _ in range(5)]
+    client = _paced(clock, rejected, max_retries=2)
+    assert client.get(URL).status_code == 429
+    assert pacer_of(client).throttled == 3
+
+
+def test_a_rejected_write_is_resent_with_its_body(clock):
+    seen: list[tuple[str, bytes]] = []
+    responses = [httpx.Response(429, headers={"Retry-After": "0"})]
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.content))
+        return responses.pop(0) if responses else httpx.Response(201)
+
+    pacer = Pacer(4, clock=clock.monotonic)
+    transport = PacedTransport(pacer, httpx.MockTransport(answer), sleep=clock.sleep)
+    response = httpx.Client(transport=transport).post(URL, json={"name": "x"})
+    assert response.status_code == 201
+    assert seen == [("POST", b'{"name":"x"}')] * 2
+
+
+def test_async_transport_resends_a_429(clock):
+    responses = [httpx.Response(429, headers={"Retry-After": "1"})]
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        return responses.pop(0) if responses else httpx.Response(200)
+
+    async def run() -> int:
+        pacer = Pacer(4, clock=clock.monotonic)
+        transport = AsyncPacedTransport(pacer, httpx.MockTransport(answer), sleep=clock.async_sleep)
+        async with httpx.AsyncClient(transport=transport) as client:
+            return (await client.get(URL)).status_code
+
+    assert asyncio.run(run()) == 200
+    assert clock.slept == [1.0]
 
 
 def test_concurrency_is_capped():
@@ -225,7 +337,7 @@ def test_async_transport_shares_the_pause(clock):
         return responses.pop(0) if responses else httpx.Response(200)
 
     async def run() -> list[int]:
-        pacer = Pacer(4, clock=clock.monotonic)
+        pacer = Pacer(4, clock=clock.monotonic, max_retries=0)
         transport = AsyncPacedTransport(pacer, httpx.MockTransport(answer), sleep=clock.async_sleep)
         async with httpx.AsyncClient(transport=transport) as client:
             return [(await client.get(URL)).status_code for _ in range(2)]
@@ -318,3 +430,38 @@ def test_max_concurrency_env_must_be_an_integer(api_key_env, clean_env):
 def test_max_concurrency_must_be_positive(value):
     with pytest.raises(ConfigError, match="max_concurrency"):
         BenchlingConfig(base_url=BASE_URL, api_key="k", max_concurrency=value)
+
+
+def test_max_retries_defaults_to_eight(api_key_config):
+    assert api_key_config.max_retries == 8
+    assert pacer_for(connect(api_key_config)).max_retries == 8
+
+
+def test_max_retries_from_env(api_key_env, clean_env):
+    clean_env.setenv("BENCHLING_MAX_RETRIES", "3")
+    config = BenchlingConfig.from_env()
+    assert config.max_retries == 3
+    assert pacer_for(connect(config)).max_retries == 3
+
+
+def test_explicit_max_retries_beats_env(api_key_env, clean_env):
+    clean_env.setenv("BENCHLING_MAX_RETRIES", "3")
+    assert BenchlingConfig.from_env(max_retries=5).max_retries == 5
+
+
+def test_max_retries_must_not_be_negative():
+    with pytest.raises(ConfigError, match="max_retries"):
+        BenchlingConfig(base_url=BASE_URL, api_key="k", max_retries=-1)
+
+
+def test_max_retries_env_must_be_an_integer(api_key_env, clean_env):
+    clean_env.setenv("BENCHLING_MAX_RETRIES", "lots")
+    with pytest.raises(ConfigError, match="integer"):
+        BenchlingConfig.from_env()
+
+
+def test_sdk_keeps_its_own_retries(api_key_config):
+    assert connect(api_key_config)._client_wrapper._max_retries == 2
+    benchling = connect(api_key_config, max_retries=5)
+    assert benchling._client_wrapper._max_retries == 5
+    assert pacer_for(benchling).max_retries == 8

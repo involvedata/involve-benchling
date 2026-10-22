@@ -8,8 +8,9 @@ option below is set:
 
 - ``config.read_only`` blocks every request that could change tenant data
   (see :mod:`~involve_benchling.core.readonly`).
-- ``config.pacing`` caps concurrent requests and pauses them together after
-  a ``429`` (see :mod:`~involve_benchling.core.pacing`).
+- ``config.pacing`` caps concurrent requests and their rate, pauses them
+  together after a ``429`` and resends rejected requests (see
+  :mod:`~involve_benchling.core.pacing`).
 
 The read-only check runs first, so a blocked write never waits.
 """
@@ -60,9 +61,15 @@ def _http_kwargs(extra: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _pacer(config: BenchlingConfig) -> Pacer | None:
+    if not config.pacing:
+        return None
+    return Pacer(config.max_concurrency, max_retries=config.max_retries)
+
+
 def _sync_transport(config: BenchlingConfig) -> tuple[httpx.BaseTransport, Pacer | None]:
     transport: httpx.BaseTransport = httpx.HTTPTransport()
-    pacer = Pacer(config.max_concurrency) if config.pacing else None
+    pacer = _pacer(config)
     if pacer:
         transport = PacedTransport(pacer, transport)
     if config.read_only:
@@ -74,7 +81,7 @@ def _async_transport(
     config: BenchlingConfig,
 ) -> tuple[httpx.AsyncBaseTransport, Pacer | None]:
     transport: httpx.AsyncBaseTransport = httpx.AsyncHTTPTransport()
-    pacer = Pacer(config.max_concurrency) if config.pacing else None
+    pacer = _pacer(config)
     if pacer:
         transport = AsyncPacedTransport(pacer, transport)
     if config.read_only:
@@ -86,7 +93,8 @@ def connect(config: BenchlingConfig, **extra: Any) -> Benchling:
     """Create a synchronous ``benchling_v3_sdk.Benchling`` client.
 
     Extra keyword arguments (``timeout``, ``max_retries``, ``httpx_client``,
-    ...) are forwarded to the SDK constructor.
+    ...) are forwarded to the SDK constructor. The SDK's ``max_retries``
+    covers errors other than ``429``; ``config.max_retries`` covers ``429``.
 
     Raises:
         ConfigError: ``httpx_client`` was passed while ``config.read_only`` or
