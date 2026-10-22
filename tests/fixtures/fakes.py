@@ -94,11 +94,13 @@ class FakeClock:
     """Replaces the ``time`` module where TTLs are computed.
 
     Both wall-clock and monotonic time start at ``start`` and move only
-    when a test calls :meth:`advance`.
+    when a test calls :meth:`advance` or :meth:`sleep`. :attr:`slept`
+    records every sleep.
     """
 
     def __init__(self, start: float = 1_000_000.0) -> None:
         self.now = start
+        self.slept: list[float] = []
 
     def time(self) -> float:
         return self.now
@@ -108,3 +110,10 @@ class FakeClock:
 
     def advance(self, seconds: float) -> None:
         self.now += seconds
+
+    def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.advance(seconds)
+
+    async def async_sleep(self, seconds: float) -> None:
+        self.sleep(seconds)

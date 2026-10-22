@@ -12,8 +12,21 @@ from ..errors import ConfigError
 _ENV_PREFIX = "BENCHLING_"
 
 
-def _env_flag(name: str) -> bool:
-    return os.getenv(f"{_ENV_PREFIX}{name}", "").lower() in ("1", "true", "yes")
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(f"{_ENV_PREFIX}{name}", "").strip().lower()
+    if not value:
+        return default
+    return value in ("1", "true", "yes")
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(f"{_ENV_PREFIX}{name}", "").strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        raise ConfigError(f"{_ENV_PREFIX}{name} must be an integer, got {value!r}") from None
 
 
 @dataclass(frozen=True)
@@ -32,6 +45,10 @@ class BenchlingConfig:
     registry_name: str | None = None
     #: Clients built from this config send only reads (see :mod:`~involve_benchling.core.readonly`).
     read_only: bool = False
+    #: Clients pause together after a ``429`` (see :mod:`~involve_benchling.core.pacing`).
+    pacing: bool = True
+    #: Most requests a paced client sends at once.
+    max_concurrency: int = 4
     cache: CachePolicy = field(default_factory=CachePolicy)
 
     def __post_init__(self) -> None:
@@ -47,6 +64,8 @@ class BenchlingConfig:
             )
         if has_key and has_oauth:
             raise ConfigError("Provide api_key or OAuth credentials, not both.")
+        if self.max_concurrency < 1:
+            raise ConfigError(f"max_concurrency must be at least 1, got {self.max_concurrency}")
 
     @property
     def auth_method(self) -> str:
@@ -60,7 +79,8 @@ class BenchlingConfig:
         Recognised variables: ``BENCHLING_BASE_URL``, ``BENCHLING_API_KEY``,
         ``BENCHLING_OAUTH_CLIENT_ID``, ``BENCHLING_OAUTH_CLIENT_SECRET``,
         ``BENCHLING_EARLY_ACCESS``, ``BENCHLING_REGISTRY_NAME``,
-        ``BENCHLING_READ_ONLY``.
+        ``BENCHLING_READ_ONLY``, ``BENCHLING_PACING`` (on unless set to a false
+        value), ``BENCHLING_MAX_CONCURRENCY``.
         Keyword arguments override environment values.
         """
         env: dict[str, Any] = {
@@ -71,6 +91,8 @@ class BenchlingConfig:
             "early_access": _env_flag("EARLY_ACCESS"),
             "registry_name": os.getenv(f"{_ENV_PREFIX}REGISTRY_NAME") or None,
             "read_only": _env_flag("READ_ONLY"),
+            "pacing": _env_flag("PACING", default=True),
+            "max_concurrency": _env_int("MAX_CONCURRENCY", 4),
         }
         env.update(overrides)
         return cls(**env)
