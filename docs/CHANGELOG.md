@@ -4,6 +4,24 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## 0.1.1 (2026-10-22)
+
+### Added
+
+- `core.pacing`: a shared rate limit alongside the concurrency cap. Requests
+  are spaced to a rate that starts at 10 requests/s, halves on a `429`
+  (down to 0.5) and rises by 0.1 requests/s per success (up to 20).
+  `Pacer.rate` reports it.
+- `BenchlingConfig.max_retries` (default 8, or `BENCHLING_MAX_RETRIES`): a
+  paced client resends a request that got a `429` up to this many times,
+  for every method. A negative value raises `ConfigError`.
+
+### Fixed
+
+- Large crawls no longer fail on `429 Budget rate limit hit`. In 0.1.0 a
+  cap of one request in flight still allowed fast back-to-back requests,
+  and the SDK gave up after 2 retries.
+
 ## 0.1.0 (2026-10-22)
 
 ### Added
