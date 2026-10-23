@@ -12,7 +12,10 @@ option below is set:
   together after a ``429`` and resends rejected requests (see
   :mod:`~involve_benchling.core.pacing`).
 
-The read-only check runs first, so a blocked write never waits.
+The read-only check runs first, so a blocked write never waits. Requests
+then go direct or through the proxy the environment names (see
+:mod:`~involve_benchling.core.proxy`), and every route shares the client's
+pacer.
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ import httpx
 from ..errors import ConfigError
 from .config import BenchlingConfig
 from .pacing import AsyncPacedTransport, PacedTransport, Pacer, _register
+from .proxy import async_http_transport, http_transport
 from .readonly import AsyncReadOnlyTransport, ReadOnlyTransport
 
 if TYPE_CHECKING:
@@ -68,7 +72,7 @@ def _pacer(config: BenchlingConfig) -> Pacer | None:
 
 
 def _sync_transport(config: BenchlingConfig) -> tuple[httpx.BaseTransport, Pacer | None]:
-    transport: httpx.BaseTransport = httpx.HTTPTransport()
+    transport: httpx.BaseTransport = http_transport()
     pacer = _pacer(config)
     if pacer:
         transport = PacedTransport(pacer, transport)
@@ -80,7 +84,7 @@ def _sync_transport(config: BenchlingConfig) -> tuple[httpx.BaseTransport, Pacer
 def _async_transport(
     config: BenchlingConfig,
 ) -> tuple[httpx.AsyncBaseTransport, Pacer | None]:
-    transport: httpx.AsyncBaseTransport = httpx.AsyncHTTPTransport()
+    transport: httpx.AsyncBaseTransport = async_http_transport()
     pacer = _pacer(config)
     if pacer:
         transport = AsyncPacedTransport(pacer, transport)

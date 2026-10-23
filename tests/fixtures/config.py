@@ -21,12 +21,19 @@ ENV_VARS = (
     "BENCHLING_MAX_RETRIES",
 )
 
+PROXY_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")
+
 
 @pytest.fixture
 def clean_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
-    """Removes every ``BENCHLING_*`` variable so a developer's shell cannot leak in."""
+    """Removes every ``BENCHLING_*`` and proxy variable so a developer's shell cannot leak in."""
     for name in ENV_VARS:
         monkeypatch.delenv(name, raising=False)
+    for name in PROXY_VARS:
+        monkeypatch.delenv(name, raising=False)
+        monkeypatch.delenv(name.lower(), raising=False)
+    monkeypatch.setattr("urllib.request.getproxies_macosx_sysconf", dict, raising=False)
+    monkeypatch.setattr("urllib.request.getproxies_registry", dict, raising=False)
     return monkeypatch
 
 

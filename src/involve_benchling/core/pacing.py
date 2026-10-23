@@ -42,6 +42,8 @@ from typing import Any
 
 import httpx
 
+from .proxy import async_http_transport, http_transport
+
 __all__ = [
     "INITIAL_RATE",
     "MAX_PAUSE",
@@ -226,7 +228,7 @@ class PacedTransport(httpx.BaseTransport):
         sleep: Callable[[float], None] | None = None,
     ) -> None:
         self.pacer = pacer
-        self._inner = inner or httpx.HTTPTransport()
+        self._inner = inner or http_transport()
         self._ready = threading.Condition()
         self._sleep = sleep or time.sleep
 
@@ -275,7 +277,7 @@ class AsyncPacedTransport(httpx.AsyncBaseTransport):
         sleep: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
         self.pacer = pacer
-        self._inner = inner or httpx.AsyncHTTPTransport()
+        self._inner = inner or async_http_transport()
         self._ready = asyncio.Condition()
         self._sleep = sleep or asyncio.sleep
 

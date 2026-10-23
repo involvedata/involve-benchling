@@ -24,6 +24,7 @@ from typing import Any
 import httpx
 
 from ..errors import ReadOnlyViolationError
+from .proxy import async_http_transport, http_transport
 
 __all__ = [
     "READ_POSTS",
@@ -69,7 +70,7 @@ class ReadOnlyTransport(httpx.BaseTransport):
 
     def __init__(self, base_url: str, inner: httpx.BaseTransport | None = None) -> None:
         self._read_posts = _read_posts(base_url)
-        self._inner = inner or httpx.HTTPTransport()
+        self._inner = inner or http_transport()
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         _check(request, self._read_posts)
@@ -84,7 +85,7 @@ class AsyncReadOnlyTransport(httpx.AsyncBaseTransport):
 
     def __init__(self, base_url: str, inner: httpx.AsyncBaseTransport | None = None) -> None:
         self._read_posts = _read_posts(base_url)
-        self._inner = inner or httpx.AsyncHTTPTransport()
+        self._inner = inner or async_http_transport()
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         _check(request, self._read_posts)
