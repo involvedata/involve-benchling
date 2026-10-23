@@ -4,6 +4,25 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## 0.1.2 (2026-10-23)
+
+### Added
+
+- `core.proxy`: `http_transport()` and `async_http_transport()` build network
+  transports that honour `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and
+  `NO_PROXY` the way httpx does. `ProxyTransport` and `AsyncProxyTransport`
+  route each request direct or through its proxy.
+
+### Fixed
+
+- Clients built by `connect()` / `connect_async()` now use the proxy
+  environment variables. In 0.1.1 read-only and paced clients sent every
+  request direct, so they failed in proxied sandboxes with what looked like
+  a DNS error. The read-only check still runs before any proxy is
+  contacted, and proxied and direct requests share one pacer. The
+  `read_only_http_client()` helpers and transports built without an
+  `inner` transport get the same fix.
+
 ## 0.1.1 (2026-10-22)
 
 ### Added
