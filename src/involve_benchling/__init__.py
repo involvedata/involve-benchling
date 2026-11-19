@@ -8,7 +8,8 @@ models:
   typed errors, over any V3 resource.
 - :mod:`involve_benchling.dataframes` -- pandas adapters (optional extra).
 - :mod:`involve_benchling.testing` -- pytest fixtures and resource cleanup.
-- :mod:`involve_benchling.tools` -- cross-resource workflows (roadmap).
+- :mod:`involve_benchling.tools` -- cross-resource workflows: tenant
+  discovery and registry ERDs (:mod:`involve_benchling.tools.discovery`).
 
 Quick start::
 
