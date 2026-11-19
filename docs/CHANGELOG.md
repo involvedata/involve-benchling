@@ -4,6 +4,32 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- `tools.discovery`, moved from Involve Data's Benchling tenant inspector so
+  other tools can share it.
+  - `crawl_erd_env()` crawls every schema family with its field definitions,
+    validation rules and fieldsets, plus dropdowns, registries and
+    organizations, through an `AsyncBenchling` client. Read-only. Each
+    section records its outcome under `_status`. A failed section is `None`,
+    never `[]`, and a schema whose fields failed to load is marked
+    `_detail_error`, never shown with no fields. `crawl_schemas()` and
+    `crawl_section()` are the building blocks.
+  - `build_erd_data()` turns a crawl into the ERD (schema map) of one
+    registry: its live schemas, the organization-level schemas that link to
+    or from it and the owning organization's result schemas. It optionally
+    takes hand-supplied extras (`load_extras()`) and findings to flag on the
+    map.
+  - `render_html()` writes a self-contained interactive page that needs no
+    network (dagre 0.8.5, MIT, and Poppins, SIL OFL 1.1, are bundled).
+    `render_json()` writes the map's data as versioned JSON
+    (`"format": "benchling-tenant-inspector/erd"`, version 1, unchanged so
+    existing readers keep working), and `render_mermaid()` a Mermaid
+    `erDiagram`. A map from a partial schema crawl carries a warning in all
+    three.
+
 ## 0.1.2 (2026-10-23)
 
 ### Added

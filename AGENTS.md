@@ -18,6 +18,7 @@ the SDK directly.
 | `src/involve_benchling/resolve/` | Generic lookups over any `list` resource |
 | `src/involve_benchling/dataframes.py` | pandas adapters (optional extra) |
 | `src/involve_benchling/testing/` | pytest plugin and `ResourceTracker` |
+| `src/involve_benchling/tools/discovery/` | Schema crawl and registry ERD (page template and vendored dagre/Poppins in `templates/`) |
 | `tests/fixtures/` | Shared fakes, builders and a canned tenant |
 | `docs/design/` | Design documents for planned modules |
 
