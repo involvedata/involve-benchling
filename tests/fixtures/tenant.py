@@ -38,7 +38,7 @@ PLASMID_FIELD_NAMES = {
 def plasmid_field_definitions() -> SchemaFieldDefinitionUnpaginatedList:
     return b.field_definitions(
         b.field_definition_payload(
-            CONCENTRATION, "Concentration", type="FLOAT", typename="FloatFieldDefinition"
+            CONCENTRATION, "Concentration", type="DECIMAL", typename="DecimalFieldDefinition"
         ),
         b.field_definition_payload(
             HOST, "Host", type="CUSTOM_ENTITY_LINK", typename="CustomEntityLinkFieldDefinition"
