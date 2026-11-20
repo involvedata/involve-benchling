@@ -2,18 +2,15 @@
 
 import json
 import re
-from pathlib import Path
 
 import pytest
 
+from involve_benchling.errors import InvolveBenchlingError
+from involve_benchling.tools.discovery import erd as erd_module
 from involve_benchling.tools.discovery.erd import (
     ErdError,
     build_erd_data,
-    load_extras,
-    render_html,
-    render_json,
     render_mermaid,
-    resolve_registry,
 )
 
 
@@ -24,9 +21,9 @@ def _f(fid, name, typename="TextFieldDefinition", **extra):
 REG = {"__typename": "Registry", "id": "src_1"}
 ENV = {
     "_meta": {
-        "tenant_url": "https://example.benchling.com",
-        "generated_at": "2026-10-26T13:25:31+00:00",
-        "registry": None,
+        "tenant": "example",
+        "tenantUrl": "https://example.benchling.com",
+        "crawledAt": "2026-10-26T13:25:31Z",
     },
     "_status": {"complete": True},
     "registries": [
@@ -209,22 +206,6 @@ ENV = {
         },
     },
 }
-FINDINGS = {
-    "findings": [
-        {
-            "check": "naming.no_template",
-            "severity": "medium",
-            "title": "No naming template",
-            "subject": {"type": "schema", "id": "ts_comp"},
-        },
-        {
-            "check": "naming.no_template",
-            "severity": "medium",
-            "title": "No naming template",
-            "subject": {"type": "schema", "id": "ts_elsewhere"},
-        },
-    ]
-}
 EXTRAS = {
     "hidden": ["Test Thing"],
     "ingredients": {"Recipe": "Component"},
@@ -235,7 +216,7 @@ EXTRAS = {
 
 
 def _data(**kw):
-    return build_erd_data(ENV, "Main Registry", kw.get("extras", EXTRAS), FINDINGS)
+    return build_erd_data(ENV, "Main Registry", kw.get("extras", EXTRAS))
 
 
 def _node(data, name):
@@ -270,7 +251,7 @@ def test_every_result_schema_of_the_registrys_organization_is_shown():
         "organization": {"id": "ent_1"},
         "fieldDefinitions": [],
     }
-    data = build_erd_data(env, "Main Registry", EXTRAS, FINDINGS)
+    data = build_erd_data(env, "Main Registry", EXTRAS)
     names = {n["name"] for n in data["nodes"]}
     assert {"Screen", "Unrelated"} <= names  # linked and unlinked results of the owning org
     assert "Theirs" not in names and "Gone" not in names  # another org's unlinked result; archived
@@ -291,7 +272,7 @@ def test_entity_type_uses_the_real_type_when_benchling_lists_the_wrong_one():
     env = json.loads(json.dumps(ENV))
     env["schemas"]["ts_comp"]["type"] = "custom_entity"
     env["schemas"]["ts_comp"]["typeMismatch"] = {"listedAs": "custom_entity", "foundAs": "protein"}
-    data = build_erd_data(env, "Main Registry", EXTRAS, FINDINGS)
+    data = build_erd_data(env, "Main Registry", EXTRAS)
     assert _node(data, "Component")["type"] == "protein"
     assert _node(data, "Component")["listedAs"] == "custom_entity"
     assert _node(data, "Strain")["type"] == "custom_entity" and "listedAs" not in _node(
@@ -315,8 +296,7 @@ def test_fields_linking_off_the_map_stay_named_without_an_arrow():
         (lot[n]["hiddenTo"], lot[n]["offWhy"]) for n in ("Old Batch", "Test link", "Source")
     ] == [("Old Batch", "archived"), ("Test Thing", "hidden"), ("Elsewhere", "Other Registry")]
     assert not any("to" in lot[n] for n in ("Old Batch", "Test link", "Source"))  # no arrow
-    page = render_html(data)
-    assert "not on this map" in page and "stay on their cards" in page
+    assert "but are not linked to it" in " ".join(data["notes"])
 
 
 def test_tool_bookkeeping_schemas_are_left_off_every_map():
@@ -334,12 +314,12 @@ def test_tool_bookkeeping_schemas_are_left_off_every_map():
         _f("f_lim", "Revision", "CustomEntityLinkFieldDefinition", linkDefinition={"id": "ts_lim1"})
     )
     for registry in ("Main Registry", "Other Registry"):
-        data = build_erd_data(env, registry, {}, FINDINGS)  # no extras entry needed
+        data = build_erd_data(env, registry, {})  # no extras entry needed
         assert "liminal_remote" not in {n["name"] for n in data["nodes"]}
         assert "left off: liminal_remote" in " ".join(data["notes"])
     rev = next(
         f
-        for f in _node(build_erd_data(env, "Main Registry", {}, FINDINGS), "Strain")["fields"]
+        for f in _node(build_erd_data(env, "Main Registry", {}), "Strain")["fields"]
         if f["n"] == "Revision"
     )
     assert (
@@ -354,19 +334,18 @@ def test_inventory_cards_carry_their_barcode_prefix():
     env["schemas"]["box_rack"]["prefix"] = "RACK"
     env["schemas"]["loc_lab"]["prefix"] = "LAB"
     env["schemas"]["ts_strain"]["prefix"] = "STR"  # entities list it too; itemIdPrefix wins
-    data = build_erd_data(env, "Main Registry", {}, FINDINGS)
+    data = build_erd_data(env, "Main Registry", {})
     got = {n["name"]: (n["prefix"], n.get("prefixKind")) for n in data["nodes"]}
     assert got["Rack"] == ("RACK", "barcode") and got["Lab"] == ("LAB", "barcode")
     assert got["Strain"] == ("STR", "id") and got["Screen"] == (None, None)
-    page = render_html(data)
-    assert "Barcode prefix" in page and "Registry ID prefix" in page
 
 
-def test_json_file_is_the_page_data_with_a_version():
+def test_data_names_its_format_and_survives_json():
     data = _data()
-    out = json.loads(render_json(data))
-    assert out.pop("format") == "benchling-tenant-inspector/erd" and out.pop("version") == 1
-    assert out == json.loads(json.dumps(data))
+    assert list(data)[:2] == ["format", "version"]
+    assert data["format"] == "involve-benchling/erd" and data["version"] == 1
+    assert json.loads(json.dumps(data)) == data
+    assert "layout" not in data
 
 
 def test_mermaid_has_every_schema_and_link():
@@ -378,7 +357,7 @@ def test_mermaid_has_every_schema_and_link():
     entities = [ln for ln in lines if re.match(r'^    s\d+\["[^"]*"\] \{$', ln)]
     assert len(entities) == len(data["nodes"])
     rels = [ln for ln in lines if re.match(r'^    s\d+ [|}][|o]--o\{ s\d+ : "[^"]*"$', ln)]
-    # the page's arrows: no line for a computed field that points back at its own schema
+    # no line for a computed field that points back at its own schema
     links = sum(
         1
         for n in data["nodes"]
@@ -405,7 +384,7 @@ def test_mermaid_numbers_a_label_repeated_between_two_schemas():
     )
     rels = [
         ln
-        for ln in render_mermaid(build_erd_data(env, "Main Registry", {}, FINDINGS)).splitlines()
+        for ln in render_mermaid(build_erd_data(env, "Main Registry", {})).splitlines()
         if "--o{" in ln
     ]
     assert (
@@ -464,10 +443,6 @@ def test_hand_supplied_facts_and_notes():
     assert "Archived" in notes and "Test Thing" in notes and "added by hand" in notes
 
 
-def test_findings_are_limited_to_schemas_on_the_map():
-    assert [f["id"] for f in _data()["findings"]] == ["ts_comp"]
-
-
 def test_bad_input_is_refused():
     for extras in (
         {"hidden": ["Nope"]},
@@ -476,72 +451,16 @@ def test_bad_input_is_refused():
         {"contents": {"Rack": ["Nope"]}},
     ):
         try:
-            build_erd_data(ENV, "Main Registry", extras, FINDINGS)
+            build_erd_data(ENV, "Main Registry", extras)
         except ErdError:
             continue
         raise AssertionError(f"accepted bad extras {extras}")
     try:
-        resolve_registry(ENV, None)  # two registries and no --registry
+        build_erd_data(ENV)  # two registries and none named
     except ErdError:
         pass
     else:
         raise AssertionError("picked a registry without being told")
-
-
-def test_unknown_extras_keys_are_refused(tmp_path: Path) -> None:
-    tmp = tmp_path / "example.extras.json"
-    tmp.write_text(json.dumps({"hiden": []}))
-    with pytest.raises(ErdError):
-        load_extras(tmp)
-
-
-def test_no_extras_path_means_no_extras() -> None:
-    assert load_extras(None) == {}
-
-
-def test_render_fills_every_placeholder_and_escapes_script_end():
-    env = json.loads(json.dumps(ENV))
-    env["schemas"]["ts_comp"]["name"] = "</script><b>x"
-    page = render_html(build_erd_data(env, "src_1", {}, FINDINGS))
-    assert not re.search(r"__[A-Z_]+__", page)
-    assert "</script><b>x" not in page and "<\\/script><b>x" in page
-    assert "<title>Main Schema Map</title>" in page
-    assert 'id="savelayout"' in page and "layouts/" in page  # saved card arrangement
-    assert all(f'id="tab-{v}"' in page for v in ("all", "model", "inventory"))  # three views
-    assert (
-        'id="expandAll"' not in page and 'id="isolated"' not in page
-    )  # one control: Compact cards off = all expanded
-    assert "state.expandAll = !state.linksOnly" in page
-    assert all(
-        f'id="{i}" type="button" role="switch" aria-checked="true"' in page
-        for i in ("linksOnly", "showFindings")
-    )  # slide switches
-    assert 'id="showFindings"' in page and ".app.nofind" in page  # clean-ERD findings toggle
-    assert (
-        "lsGet('shape') || 'elbow'" in page and "lsGet('head') || 'erd'" in page
-    )  # elbow + crow's foot by default
-    assert (
-        'class="logo"' in page and page.count("data:image/png;base64,") >= 2
-    )  # embedded Involve Data logo, light + dark
-    assert 'id="exportpng"' in page and "function exportPng" in page  # diagram image
-    assert 'id="exporthtml"' in page and "const PRISTINE_APP" in page  # download with arrangement
-    assert (
-        len(re.findall(r"^const ERD = ", page, re.M)) == 1
-    )  # the export rewrites exactly this line
-
-
-def test_page_needs_no_network():
-    page = render_html(build_erd_data(json.loads(json.dumps(ENV)), "src_1", {}, FINDINGS))
-    assert page.startswith('<meta charset="utf-8">')  # opened from disk, symbols must not garble
-    assert not re.search(
-        r"""<(?:script|link|img)\b[^>]*\b(?:src|href)=["']?(?:https?:)?//""", page, re.I
-    )
-    assert "@import" not in page and not re.search(r"url\(\s*['\"]?(?:https?:)?//", page)
-    assert (
-        '<script id="erd-dagre">' in page and "dagre" in page and "graphlib" in page
-    )  # layout library inlined
-    assert page.count("@font-face{font-family:'Poppins'") == 3 and "data:font/woff2;base64," in page
-    assert "getElementById('erd-dagre').textContent" in page  # the HTML download carries it too
 
 
 def test_counts_match_the_crawl_for_the_registry():
@@ -564,7 +483,7 @@ def test_counts_match_the_crawl_for_the_registry():
     }
     on_map = reg | org
     links = sum(1 for sid in on_map for f in schemas[sid]["fieldDefinitions"] if tgt(f) in on_map)
-    data = build_erd_data(json.loads(json.dumps(ENV)), "Main Registry", {}, FINDINGS)
+    data = build_erd_data(json.loads(json.dumps(ENV)), "Main Registry", {})
     assert {n["id"] for n in data["nodes"]} == on_map and len(on_map) == 8
     for n in data[
         "nodes"
@@ -573,8 +492,6 @@ def test_counts_match_the_crawl_for_the_registry():
             schemas[n["id"]]["fieldDefinitions"]
         ), n["name"]
     assert sum(1 for n in data["nodes"] for f in n["fields"] if f.get("to")) == links == 6
-    page = render_html(data)
-    assert '"id":"assay_screen"' in page and '"id":"ts_elsewhere"' not in page
 
 
 def _with_status(status, **schema_changes):
@@ -582,12 +499,12 @@ def _with_status(status, **schema_changes):
     env["_status"] = status
     for sid, change in schema_changes.items():
         env["schemas"][sid].update(change)
-    data = build_erd_data(env, "Main Registry", {}, FINDINGS)
-    return data, render_html(data)
+    data = build_erd_data(env, "Main Registry", {})
+    return data, data["meta"]["schemaGap"]
 
 
 def test_complete_crawl_has_no_banner():
-    data, page = _with_status(
+    data, gap = _with_status(
         {
             "complete": True,
             "incomplete_sections": [],
@@ -596,12 +513,12 @@ def test_complete_crawl_has_no_banner():
             },
         }
     )
-    assert data["meta"]["schemasComplete"] and data["meta"]["schemaGap"] is None
-    assert 'id="partial"' not in page and "Partial crawl" not in page.split("<script")[0]
+    assert data["meta"]["schemasComplete"] and gap is None
+    assert "PARTIAL CRAWL" not in render_mermaid(data)
 
 
 def test_failed_schema_type_produces_the_banner():
-    data, page = _with_status(
+    data, gap = _with_status(
         {
             "complete": False,
             "incomplete_sections": ["schemas"],
@@ -618,19 +535,17 @@ def test_failed_schema_type_produces_the_banner():
         }
     )
     assert not data["meta"]["schemasComplete"]
-    banner = re.search(
-        r'<div class="partial" id="partial" role="alert">.*?</div>', page, re.S
-    ).group(0)
-    assert "Partial crawl. This map may be missing schemas." in banner
-    assert (
-        "12 of 13 schema types came back; failed: result schema (ForbiddenError, HTTP 403)."
-        in banner
-    )
-    assert "<b>no access</b>" not in page  # Benchling's message is left out, and never injected
+    assert gap == {
+        "lines": [
+            "12 of 13 schema types came back; failed: result schema (ForbiddenError, HTTP 403)."
+        ]
+    }
+    assert "no access" not in json.dumps(data)  # Benchling's message is left out
+    assert "%% PARTIAL CRAWL: this map may be missing schemas." in render_mermaid(data)
 
 
 def test_unrelated_section_failure_has_no_banner():
-    data, page = _with_status(
+    data, gap = _with_status(
         {
             "complete": False,
             "incomplete_sections": ["notebook_entries"],
@@ -641,11 +556,11 @@ def test_unrelated_section_failure_has_no_banner():
         }
     )
     assert data["meta"]["complete"] is False and data["meta"]["schemasComplete"]
-    assert 'id="partial"' not in page
+    assert gap is None
 
 
 def test_fields_that_failed_to_load_are_flagged():
-    data, page = _with_status(
+    data, gap = _with_status(
         {
             "complete": False,
             "incomplete_sections": ["schemas"],
@@ -662,12 +577,83 @@ def test_fields_that_failed_to_load_are_flagged():
         ts_comp={"_detail_error": "ApiError: HTTP 500: boom", "fieldDefinitions": None},
     )
     assert _node(data, "Component")["detailError"] is True
-    assert "2 schemas were listed but their fields didn't load, 1 of them on this map." in page
-    assert "fields didn\\'t load" in page  # the card tag (in the page script)
+    assert gap == {
+        "lines": ["2 schemas were listed but their fields didn't load, 1 of them on this map."]
+    }
 
 
 def test_partial_crawl_without_section_detail_still_warns():
-    _, page = _with_status({"complete": False})
-    assert 'id="partial"' in page and "does not say whether schemas were affected" in page
-    _, page = _with_status({"complete": False, "incomplete_sections": ["dashboards"]})
-    assert 'id="partial"' not in page
+    _, gap = _with_status({"complete": False})
+    assert gap and "does not say whether schemas were affected" in gap["lines"][0]
+    _, gap = _with_status({"complete": False, "incomplete_sections": ["dashboards"]})
+    assert gap is None
+
+
+def test_meta_reads_only_the_current_crawl_format() -> None:
+    """Older crawls' tenant_url and generated_at are the caller's to rename."""
+    env = json.loads(json.dumps(ENV))
+    env["_meta"] = {
+        "tenant_url": "https://example.benchling.com",
+        "generated_at": "2026-10-26T13:25:31+00:00",
+    }
+    meta = build_erd_data(env, "Main Registry")["meta"]
+    assert (meta["tenant"], meta["tenantUrl"], meta["crawledAt"]) == (None, None, None)
+
+
+def test_meta_from_a_discovery_crawl() -> None:
+    env = json.loads(json.dumps(ENV))
+    env["_meta"] = {
+        "tenant": "example",
+        "tenantUrl": "https://example.benchling.com",
+        "crawledAt": "2026-11-19T19:32:47Z",
+    }
+    meta = build_erd_data(env, "Main Registry")["meta"]
+    assert (meta["tenant"], meta["tenantUrl"], meta["crawledAt"]) == (
+        "example",
+        "https://example.benchling.com",
+        "2026-11-19T19:32:47Z",
+    )
+
+
+def test_data_has_no_findings() -> None:
+    assert "findings" not in build_erd_data(ENV, "Main Registry", EXTRAS)
+
+
+@pytest.mark.parametrize(
+    "extras",
+    [
+        {"hiden": []},
+        {"hidden": "Test Thing"},
+        {"hidden": [1]},
+        {"ingredients": ["Recipe", "Component"]},
+        {"ingredients": {"Recipe": 3}},
+        {"computed": {"Strain": "latest result"}},
+        {"computed": {"Strain": {"Status": 1}}},
+        {"contents": {"Rack": "Strain Lot"}},
+        {"hierarchy": [["Lab"]]},
+        {"hierarchy": {"Lab": "Rack"}},
+        {"inventory_top": "Lab"},
+        ["hidden"],
+    ],
+)
+def test_bad_extras_are_refused(extras: object) -> None:
+    with pytest.raises(ErdError):
+        build_erd_data(ENV, "Main Registry", extras)  # type: ignore[arg-type]
+
+
+def test_registry_error_names_the_argument() -> None:
+    with pytest.raises(ErdError, match="pass registry="):
+        build_erd_data(ENV)
+
+
+def test_erd_error_is_a_library_error() -> None:
+    assert issubclass(ErdError, InvolveBenchlingError) and issubclass(ErdError, ValueError)
+
+
+def test_notes_do_not_describe_a_page() -> None:
+    notes = " ".join(build_erd_data(ENV, "Main Registry", EXTRAS)["notes"]).lower()
+    assert not any(w in notes for w in ("card", "arrow", "ƒx", "label"))
+
+
+def test_public_names() -> None:
+    assert set(erd_module.__all__) == {"ErdError", "build_erd_data", "render_mermaid"}

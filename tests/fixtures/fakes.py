@@ -139,7 +139,8 @@ class FakeUnpaged:
 class AsyncFakeResource:
     """An ``AsyncBenchling`` resource client for crawl tests.
 
-    ``list`` returns ``items`` (or raises ``fail``). Every ``list_*`` child
+    ``list`` returns ``items`` (or raises ``fail``) and counts itself in
+    ``list_calls``. Every ``list_*`` child
     listing returns nothing (or raises ``detail_fail``), and ``get`` returns a
     record with an empty naming template (or raises ``get_fail``).
     """
@@ -156,8 +157,10 @@ class AsyncFakeResource:
         self.fail = fail
         self.detail_fail = detail_fail
         self.get_fail = get_fail
+        self.list_calls = 0
 
     async def list(self, **_: Any) -> FakeUnpaged:
+        self.list_calls += 1
         if self.fail:
             raise self.fail
         return FakeUnpaged(self.items)

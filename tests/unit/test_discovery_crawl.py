@@ -1,22 +1,42 @@
 """Tests for the schema crawl: a partial crawl must never present as complete."""
 
 import asyncio
+import re
 from typing import Any
 
+import pytest
 from benchling_v3_sdk.core.api_error import ApiError
 
+from involve_benchling.core import describe_error
+from involve_benchling.errors import InvolveBenchlingError
+from involve_benchling.tools import discovery
+from involve_benchling.tools.discovery import crawl as crawl_module
 from involve_benchling.tools.discovery.crawl import (
-    ENTITY_TYPES,
-    ERD_SECTIONS,
-    SCHEMA_FAMILIES,
-    crawl_erd_env,
-    describe_error,
+    _ENTITY_TYPES as ENTITY_TYPES,
 )
+from involve_benchling.tools.discovery.crawl import (
+    _SCHEMA_FAMILIES as SCHEMA_FAMILIES,
+)
+from involve_benchling.tools.discovery.crawl import (
+    _summarize_status as summarize_status,
+)
+from involve_benchling.tools.discovery.crawl import (
+    crawl_erd_env,
+)
+from involve_benchling.tools.discovery.erd import ErdError
 from tests.fixtures.fakes import AsyncFakeResource, FakeModel
 
 
 class Boom(RuntimeError):
     pass
+
+
+#: (section name, client resource) for each tenant-wide section the crawl lists.
+SECTIONS = (
+    ("dropdowns", "dropdown"),
+    ("registries", "registry"),
+    ("organizations", "organization"),
+)
 
 
 def _client(
@@ -44,22 +64,23 @@ def _client(
     for t in ENTITY_TYPES:
         missing = ApiError(status_code=404, body={"detail": "item not found"})
         setattr(b, f"{t}_schema", AsyncFakeResource(get_fail=None if t == found_as else missing))
-    for sect in ERD_SECTIONS:
-        has_children = sect.name in child_fail_sections
+    for name, resource in SECTIONS:
+        has_children = name in child_fail_sections
         setattr(
             b,
-            sect.resource,
+            resource,
             AsyncFakeResource(
-                [FakeModel(id=f"{sect.resource}_0", name=sect.name)] if has_children else [],
-                fail=Boom("403 Forbidden") if sect.name in fail_sections else None,
+                [FakeModel(id=f"{resource}_0", name=name)] if has_children else [],
+                fail=Boom("403 Forbidden") if name in fail_sections else None,
                 detail_fail=Boom("timeout") if has_children else None,
             ),
         )
     return b
 
 
-def _crawl(b: Any = None, **kw: Any) -> dict[str, Any]:
-    return asyncio.run(crawl_erd_env(b if b is not None else _client(**kw)))
+def _crawl(b: Any = None, tenant_url: str | None = None, **kw: Any) -> dict[str, Any]:
+    client = b if b is not None else _client(**kw)
+    return asyncio.run(crawl_erd_env(client, tenant_url=tenant_url))
 
 
 def test_clean_crawl_reports_complete() -> None:
@@ -149,6 +170,30 @@ def test_failed_section_is_null_not_empty_list() -> None:
     assert env["_status"]["incomplete_sections"] == ["organizations"]
 
 
+def test_registry_failure_raises_before_anything_else_is_crawled() -> None:
+    """No map can be built without registries, so the crawl stops and says why."""
+    b = _client(fail_sections=("registries",))
+    with pytest.raises(ErdError, match=r"^could not list registries: Boom: 403 Forbidden$"):
+        _crawl(b)
+    assert b.registry.list_calls == 1
+    assert all(getattr(b, f).list_calls == 0 for f in SCHEMA_FAMILIES)
+    assert b.dropdown.list_calls == 0 and b.organization.list_calls == 0
+
+
+def test_registry_failure_carries_benchlings_reason() -> None:
+    b = _client()
+    body = {"error": {"message": "Early access is required", "type": "invalid_request_error"}}
+    b.registry = AsyncFakeResource(fail=ApiError(status_code=403, body=body))
+    with pytest.raises(ErdError) as caught:
+        _crawl(b)
+    assert str(caught.value) == (
+        "could not list registries: "
+        "ApiError: HTTP 403: Early access is required (invalid_request_error)"
+    )
+    assert isinstance(caught.value, InvolveBenchlingError)
+    assert isinstance(caught.value.__cause__, ApiError)
+
+
 def test_failed_child_fetch_is_marked_on_the_record() -> None:
     """A dropdown whose options failed must not read as one with no options."""
     env = _crawl(child_fail_sections=("dropdowns",))
@@ -162,3 +207,47 @@ def test_api_errors_are_reduced_to_status_and_message() -> None:
     body = {"error": {"message": "Not allowed", "type": "invalid_request_error"}}
     err = ApiError(status_code=403, headers={"set-cookie": "session=secret"}, body=body)
     assert describe_error(err) == "ApiError: HTTP 403: Not allowed (invalid_request_error)"
+
+
+class _Wrapper:
+    def get_base_url(self) -> str:
+        return "https://example.benchling.com/api/v3"
+
+
+def test_meta_names_the_tenant_from_the_client() -> None:
+    b = _client()
+    b._client_wrapper = _Wrapper()
+    meta = _crawl(b)["_meta"]
+    assert meta["tenant"] == "example"
+    assert meta["tenantUrl"] == "https://example.benchling.com"
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", meta["crawledAt"])
+
+
+def test_meta_tenant_url_can_be_passed() -> None:
+    b = _client()
+    b._client_wrapper = _Wrapper()
+    meta = _crawl(b, tenant_url="https://example.benchling.com/")["_meta"]
+    assert meta["tenant"] == "example" and meta["tenantUrl"] == "https://example.benchling.com"
+
+
+def test_meta_without_a_url_says_so() -> None:
+    meta = _crawl()["_meta"]
+    assert meta["tenant"] is None and meta["tenantUrl"] is None and meta["crawledAt"]
+
+
+def test_summarize_status_lists_failed_and_partial_sections() -> None:
+    out = summarize_status(
+        {"b": {"status": "error"}, "a": {"status": "partial"}, "c": {"status": "ok"}}
+    )
+    assert out["complete"] is False and out["incomplete_sections"] == ["a", "b"]
+    assert list(out["sections"]) == ["a", "b", "c"]
+
+
+def test_public_names() -> None:
+    assert crawl_module.__all__ == ["crawl_erd_env"]
+    assert set(discovery.__all__) == {
+        "ErdError",
+        "build_erd_data",
+        "crawl_erd_env",
+        "render_mermaid",
+    }

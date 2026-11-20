@@ -1,10 +1,10 @@
 """Read-only schema crawl over the async V3 client.
 
-Collects every schema family with its field definitions, validation rules and
-fieldsets, plus the reference data an ERD needs (dropdowns, registries and
-organizations). Records keep the V3 wire format (camelCase keys,
-``__typename`` kept), so a reader can check any field against the API
-reference. Sub-resource links are replaced by the fetched lists, e.g.
+:func:`crawl_erd_env` is the one public function. It collects every schema family
+with its field definitions, validation rules and fieldsets, plus the reference data
+an ERD needs (dropdowns, registries and organizations). Records keep the V3 wire
+format (camelCase keys, ``__typename`` kept), so a reader can check any field against
+the API reference. Sub-resource links are replaced by the fetched lists, e.g.
 ``fieldDefinitions`` on schemas and ``options`` on dropdowns.
 
 Registry scoping: V3 records name their registry (``registry.id``). Entity,
@@ -24,36 +24,23 @@ import asyncio
 from collections.abc import Awaitable, Iterable
 from contextlib import aclosing
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 from benchling_v3_sdk import AsyncBenchling
 from benchling_v3_sdk.core.api_error import ApiError
 from benchling_v3_sdk.core.pagination import AsyncPager
-from benchling_v3_sdk.core.parse_error import ParsingError
 
-__all__ = [
-    "DROPDOWNS",
-    "ENTITY_TYPES",
-    "ERD_SECTIONS",
-    "ORGANIZATIONS",
-    "PAGE_SIZE",
-    "REGISTRIES",
-    "SCHEMA_FAMILIES",
-    "Section",
-    "all_items",
-    "crawl_erd_env",
-    "crawl_schemas",
-    "crawl_section",
-    "describe_error",
-    "gather",
-    "summarize",
-    "wire",
-]
+from ...core.errors import describe_error
+from .erd import ErdError
+
+__all__ = ["crawl_erd_env"]
 
 #: Every V3 schema family the crawl lists. ``entity_schema`` covers all
 #: registrable types (custom entities, sequences, molecules, mixtures, ...);
 #: each record's ``type`` names its typed client.
-SCHEMA_FAMILIES: tuple[str, ...] = (
+_SCHEMA_FAMILIES: tuple[str, ...] = (
     "entity_schema",
     "result_schema",
     "run_schema",
@@ -79,7 +66,7 @@ _FAMILY_CHILDREN: dict[str, tuple[tuple[str, str], ...]] = {
 
 #: Entity types with a typed schema client, tried in turn when the listed
 #: ``type`` is wrong.
-ENTITY_TYPES: tuple[str, ...] = (
+_ENTITY_TYPES: tuple[str, ...] = (
     "custom_entity",
     "dna_sequence",
     "rna_sequence",
@@ -94,11 +81,11 @@ ENTITY_TYPES: tuple[str, ...] = (
 )
 
 #: Page size for list calls.
-PAGE_SIZE = 100
+_PAGE_SIZE = 100
 
 
 @dataclass(frozen=True)
-class Section:
+class _Section:
     """One tenant-wide resource list, with sub-resources fetched per record."""
 
     name: str
@@ -109,45 +96,18 @@ class Section:
 
 
 #: Dropdowns with their options, keyed by dropdown id.
-DROPDOWNS = Section("dropdowns", "dropdown", (("options", "list_options"),), keyed=True)
-#: Registries, each naming its owning organization.
-REGISTRIES = Section("registries", "registry")
+_DROPDOWNS = _Section("dropdowns", "dropdown", (("options", "list_options"),), keyed=True)
 #: Organizations, to name a registry's owner.
-ORGANIZATIONS = Section("organizations", "organization")
-
-#: The sections an ERD reads besides schemas.
-ERD_SECTIONS: tuple[Section, ...] = (DROPDOWNS, REGISTRIES, ORGANIZATIONS)
+_ORGANIZATIONS = _Section("organizations", "organization")
 
 
-def wire(model: Any) -> dict[str, Any]:
+def _wire(model: Any) -> dict[str, Any]:
     """Return an SDK model as a dict in the V3 wire format."""
     out: dict[str, Any] = model.model_dump(mode="json", by_alias=True)
     return out
 
 
-def describe_error(e: BaseException) -> str:
-    """Return one line naming the exception type and what went wrong.
-
-    SDK API and parsing errors stringify with every response header, session
-    cookie included, so they are reduced to status code and Benchling's message.
-    """
-    if isinstance(e, (ApiError, ParsingError)):
-        return f"{type(e).__name__}: HTTP {e.status_code}: {_api_message(e.body)}"
-    return f"{type(e).__name__}: {e}"
-
-
-def _api_message(body: Any) -> str:
-    if hasattr(body, "model_dump"):
-        body = body.model_dump(mode="json", by_alias=True)
-    if not isinstance(body, dict):
-        return str(body)
-    error = body.get("error")
-    if isinstance(error, dict) and error.get("message"):
-        return f"{error['message']} ({error.get('type')})"
-    return str(body.get("detail") or body.get("title") or body)
-
-
-async def all_items(call: Awaitable[Any], *, limit: int | None = None) -> list[Any]:
+async def _all_items(call: Awaitable[Any], *, limit: int | None = None) -> list[Any]:
     """Await an SDK list call and return every item, across pages.
 
     Paged calls return an ``AsyncPager``, whose ``items`` holds only the first
@@ -165,7 +125,7 @@ async def all_items(call: Awaitable[Any], *, limit: int | None = None) -> list[A
     return out
 
 
-async def gather(coros: Iterable[Awaitable[Any]]) -> list[Any]:
+async def _gather(coros: Iterable[Awaitable[Any]]) -> list[Any]:
     """Run calls together, returning exceptions in place of results.
 
     The client's pacer decides how many requests are in flight.
@@ -184,13 +144,13 @@ async def _typed_entity_detail(b: AsyncBenchling, listed: Any) -> tuple[Any, dic
     404 the other types are tried, and a hit is recorded as ``typeMismatch``.
     """
     listed_type = listed.type
-    order = [listed_type] if listed_type in ENTITY_TYPES else []
-    order += [t for t in ENTITY_TYPES if t != listed_type]
+    order = [listed_type] if listed_type in _ENTITY_TYPES else []
+    order += [t for t in _ENTITY_TYPES if t != listed_type]
     first_error: ApiError | None = None
     for entity_type in order:
         client = getattr(b, f"{entity_type}_schema")
         try:
-            detail = wire(await client.get(listed.id))
+            detail = _wire(await client.get(listed.id))
         except ApiError as e:
             if e.status_code != 404:
                 raise
@@ -199,7 +159,7 @@ async def _typed_entity_detail(b: AsyncBenchling, listed: Any) -> tuple[Any, dic
         if entity_type != listed_type:
             detail["typeMismatch"] = {"listedAs": listed_type, "foundAs": entity_type}
         return client, detail
-    if first_error is not None and listed_type in ENTITY_TYPES:
+    if first_error is not None and listed_type in _ENTITY_TYPES:
         raise first_error
     raise LookupError(f"no V3 schema client for entity type {listed_type!r}")
 
@@ -212,29 +172,29 @@ async def _schema_detail(b: AsyncBenchling, family: str, listed: Any) -> dict[st
     listing's ``registry`` survives the merge because typed records omit it.
     """
     client = getattr(b, family)
-    record = wire(listed)
+    record = _wire(listed)
     detail_client = client
     if family == "entity_schema":
         detail_client, detail = await _typed_entity_detail(b, listed)
         record.update(detail)
 
     record["fieldDefinitions"] = [
-        wire(f) for f in await all_items(client.list_field_definitions(listed.id))
+        _wire(f) for f in await _all_items(client.list_field_definitions(listed.id))
     ]
     if hasattr(client, "list_validation_rules"):
         record["validationRules"] = [
-            wire(r) for r in await all_items(client.list_validation_rules(listed.id))
+            _wire(r) for r in await _all_items(client.list_validation_rules(listed.id))
         ]
     if hasattr(detail_client, "list_fieldsets"):
         record["fieldsets"] = [
-            wire(f) for f in await all_items(detail_client.list_fieldsets(listed.id))
+            _wire(f) for f in await _all_items(detail_client.list_fieldsets(listed.id))
         ]
     for key, method in _FAMILY_CHILDREN.get(family, ()):
-        record[key] = [wire(x) for x in await all_items(getattr(client, method)(listed.id))]
+        record[key] = [_wire(x) for x in await _all_items(getattr(client, method)(listed.id))]
     return {"family": family, **record}
 
 
-async def crawl_schemas(b: AsyncBenchling, status: dict[str, Any]) -> dict[str, Any]:
+async def _crawl_schemas(b: AsyncBenchling, status: dict[str, Any]) -> dict[str, Any]:
     """Return every schema of every family, keyed by id, live and archived.
 
     Records the outcome in ``status["schemas"]``: ``ok`` or ``partial``, the
@@ -243,17 +203,16 @@ async def crawl_schemas(b: AsyncBenchling, status: dict[str, Any]) -> dict[str, 
     failed keeps its listing record plus ``_detail_error``, never an empty
     field list.
     """
-    # Archived schemas too: their warehouse tables outlive them, and drift should
-    # see an archive as a change rather than a removal.
-    listed = await gather(
+    # Archived schemas too, so a reader can tell an archived schema from a missing one.
+    listed = await _gather(
         [
-            all_items(getattr(b, f).list(page_size=PAGE_SIZE, archived_any_of=[True, False]))
-            for f in SCHEMA_FAMILIES
+            _all_items(getattr(b, f).list(page_size=_PAGE_SIZE, archived_any_of=[True, False]))
+            for f in _SCHEMA_FAMILIES
         ]
     )
     failed: dict[str, str] = {}
     stubs: list[tuple[str, Any]] = []
-    for family, result in zip(SCHEMA_FAMILIES, listed, strict=True):
+    for family, result in zip(_SCHEMA_FAMILIES, listed, strict=True):
         if isinstance(result, BaseException):
             # Keep the exception type, not just the message: it separates "this
             # tenant's app lacks a Read grant" from "the library is broken".
@@ -268,13 +227,13 @@ async def crawl_schemas(b: AsyncBenchling, status: dict[str, Any]) -> dict[str, 
 
     entry: dict[str, Any] = {
         "status": "partial" if failed else "ok",
-        "categories_expected": len(SCHEMA_FAMILIES),
-        "categories_returned": len(SCHEMA_FAMILIES) - len(failed),
+        "categories_expected": len(_SCHEMA_FAMILIES),
+        "categories_returned": len(_SCHEMA_FAMILIES) - len(failed),
     }
     if failed:
         entry["failed_categories"] = failed
 
-    details = await gather([_schema_detail(b, f, s) for f, s in stubs])
+    details = await _gather([_schema_detail(b, f, s) for f, s in stubs])
     schemas: dict[str, Any] = {}
     detail_errors: dict[str, str] = {}
     for (family, stub), det in zip(stubs, details, strict=True):
@@ -283,7 +242,7 @@ async def crawl_schemas(b: AsyncBenchling, status: dict[str, Any]) -> dict[str, 
             detail_errors[stub.id] = describe_error(det)
             schemas[stub.id] = {
                 "family": family,
-                **wire(stub),
+                **_wire(stub),
                 "_detail_error": detail_errors[stub.id],
             }
         else:
@@ -298,16 +257,16 @@ async def crawl_schemas(b: AsyncBenchling, status: dict[str, Any]) -> dict[str, 
 # --- tenant-wide sections ------------------------------------------------------
 
 
-async def _record_with_children(b: AsyncBenchling, section: Section, item: Any) -> dict[str, Any]:
+async def _record_with_children(b: AsyncBenchling, section: _Section, item: Any) -> dict[str, Any]:
     client = getattr(b, section.resource)
-    record = wire(item)
+    record = _wire(item)
     for key, method in section.children:
-        record[key] = [wire(x) for x in await all_items(getattr(client, method)(item.id))]
+        record[key] = [_wire(x) for x in await _all_items(getattr(client, method)(item.id))]
     return record
 
 
-async def crawl_section(
-    b: AsyncBenchling, section: Section, status: dict[str, Any]
+async def _crawl_section(
+    b: AsyncBenchling, section: _Section, status: dict[str, Any]
 ) -> list[dict[str, Any]] | dict[str, dict[str, Any]] | None:
     """List one section and fetch its children, recording the outcome in ``status``.
 
@@ -316,23 +275,23 @@ async def crawl_section(
     """
     client = getattr(b, section.resource)
     try:
-        items = await all_items(client.list(page_size=PAGE_SIZE))
+        items = await _all_items(client.list(page_size=_PAGE_SIZE))
     except Exception as e:
         status[section.name] = {"status": "error", "reason": describe_error(e)}
         return None
     status[section.name] = {"status": "ok", "count": len(items)}
 
     if section.children:
-        details = await gather([_record_with_children(b, section, i) for i in items])
+        details = await _gather([_record_with_children(b, section, i) for i in items])
     else:
-        details = [wire(i) for i in items]
+        details = [_wire(i) for i in items]
     records: list[dict[str, Any]] = []
     errors: dict[str, str] = {}
     for item, det in zip(items, details, strict=True):
         if isinstance(det, BaseException):
             # A failed child fetch must not read as a record with no children.
             errors[item.id] = describe_error(det)
-            records.append({**wire(item), "_detail_error": errors[item.id]})
+            records.append({**_wire(item), "_detail_error": errors[item.id]})
         else:
             records.append(det)
     if errors:
@@ -341,8 +300,9 @@ async def crawl_section(
     return {r["id"]: r for r in records} if section.keyed else records
 
 
-def summarize(sections: dict[str, Any]) -> dict[str, Any]:
-    """Roll per-section outcomes into one verdict the caller can act on."""
+def _summarize_status(sections: dict[str, Any]) -> dict[str, Any]:
+    """Roll per-section outcomes into one verdict: ``complete``, ``incomplete_sections``
+    (those that failed or came back partial) and ``sections`` (each section's outcome)."""
     bad = sorted(k for k, v in sections.items() if v.get("status") in ("error", "partial"))
     return {
         "complete": not bad,
@@ -351,16 +311,64 @@ def summarize(sections: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def crawl_erd_env(b: AsyncBenchling) -> dict[str, Any]:
+def _tenant_id(tenant_url: str | None) -> str | None:
+    """The tenant's short id, the first label of its host: ``example`` for example.benchling.com."""
+    host = urlparse(tenant_url or "").hostname
+    return host.split(".")[0] if host else None
+
+
+def _tenant_url(b: AsyncBenchling) -> str | None:
+    """The client's tenant URL, e.g. ``https://example.benchling.com``, if it exposes one."""
+    try:
+        base: str = b._client_wrapper.get_base_url()
+    except AttributeError:
+        return None
+    parts = urlparse(base)
+    return f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else None
+
+
+async def crawl_erd_env(b: AsyncBenchling, *, tenant_url: str | None = None) -> dict[str, Any]:
     """Crawl what an ERD needs: schemas, dropdowns, registries and organizations.
 
-    Returns a dict in the shape :func:`~involve_benchling.tools.discovery.erd.build_erd_data`
-    reads, with each section's outcome under ``_status``. Callers add ``_meta``
-    (``tenant_url``, ``generated_at``) themselves.
+    Returns a dict in the shape
+    :func:`~involve_benchling.tools.discovery.erd.build_erd_data` reads: ``schemas``
+    (keyed by id), ``dropdowns`` (keyed by id), ``registries`` and ``organizations``,
+    each section's outcome under ``_status``, and under ``_meta`` ``tenant`` (the short
+    id, e.g. ``example``), ``tenantUrl`` and ``crawledAt`` (when the crawl started, UTC,
+    ``YYYY-MM-DDTHH:MM:SSZ``). ``tenant_url`` overrides the URL read from the client.
+
+    The crawl needs a client built with ``BenchlingConfig(early_access=True)``: most of
+    the V3 endpoints it calls are beta (entity, run, entry, plate, workflow output and
+    equipment schemas, and registries) and answer 403 without it.
+
+    Registries are listed first, because no map can be built without them. If that
+    fails, nothing else is crawled.
+
+    Raises:
+        ErdError: the registries could not be listed. The message carries Benchling's
+            reason, which says whether early access, permissions or credentials are
+            at fault.
     """
-    status: dict[str, Any] = {}
-    out: dict[str, Any] = {"schemas": await crawl_schemas(b, status)}
-    sections = await asyncio.gather(*(crawl_section(b, s, status) for s in ERD_SECTIONS))
-    out.update(zip((s.name for s in ERD_SECTIONS), sections, strict=True))
-    out["_status"] = summarize(status)
-    return out
+    started = datetime.now(timezone.utc)
+    url = (tenant_url or _tenant_url(b) or "").rstrip("/") or None
+    try:
+        registries = await _all_items(b.registry.list(page_size=_PAGE_SIZE))
+    except Exception as e:
+        raise ErdError(f"could not list registries: {describe_error(e)}") from e
+    status: dict[str, Any] = {"registries": {"status": "ok", "count": len(registries)}}
+    schemas = await _crawl_schemas(b, status)
+    dropdowns, organizations = await asyncio.gather(
+        _crawl_section(b, _DROPDOWNS, status), _crawl_section(b, _ORGANIZATIONS, status)
+    )
+    return {
+        "schemas": schemas,
+        "dropdowns": dropdowns,
+        "registries": [_wire(r) for r in registries],
+        "organizations": organizations,
+        "_status": _summarize_status(status),
+        "_meta": {
+            "tenant": _tenant_id(url),
+            "tenantUrl": url,
+            "crawledAt": started.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        },
+    }

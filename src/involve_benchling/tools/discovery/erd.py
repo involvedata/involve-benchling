@@ -1,9 +1,9 @@
-"""Interactive ERD (schema map) of one registry, built from a schema crawl.
+"""ERD (schema map) of one registry, built from a schema crawl.
 
 :func:`build_erd_data` turns a crawl (see
-:func:`~involve_benchling.tools.discovery.crawl.crawl_erd_env`) into the map's data.
-:func:`render_html`, :func:`render_json` and :func:`render_mermaid` write it as an
-interactive page, a versioned JSON file and a Mermaid ``erDiagram``.
+:func:`~involve_benchling.tools.discovery.crawl.crawl_erd_env`) into the map as plain,
+versioned data. :func:`render_mermaid` draws that data as a Mermaid ``erDiagram``.
+Saving, laying out and displaying the map are left to the caller.
 
 The map holds the registry's live schemas, every live result schema of the organization
 that owns the registry (linked to the registry or not), and any other organization-level
@@ -11,81 +11,53 @@ schemas (runs, entries, workflows, other results) that link to or from the regis
 
 Pure and offline: nothing here talks to the tenant.
 
-The page has a save button for the card arrangement: on a page published as a claude.ai
-artifact it is kept in the artifact's db (publish with capabilities {db: {rules: [{path:
-"layouts", read: "view", write: "admin"}]}, user: {}}); elsewhere it is kept in the
-browser. A download button exports a standalone HTML file with the current arrangement
-embedded (published maps also declare downloads: true).
-
-The page is written in the Artifact page format (no <html>/<head>/<body> wrapper).
-Browsers also open it directly as a local file, and it needs no network: the dagre layout
-library and the Poppins font are embedded from ``templates/vendor/`` (dagre 0.8.5, MIT;
-Poppins latin 400/500/600, SIL OFL 1.1).
-
-What the crawl cannot tell us goes in optional **extras**, and the page says each of
-these was added by hand::
+What the crawl cannot tell us goes in optional **extras**, and the map's notes say each
+of these was added by hand::
 
     {
       "hidden":      ["Schema name", ...],            # leave these schemas off the map
       "ingredients": {"Mixture schema": "Ingredient schema", ...},
       "hierarchy":   [["Freezer", "Shelf"], ["Shelf", "Box"], ...],
       "contents":    {"Container schema": ["Entity schema stored in it", ...]},
-      "computed":    {"Schema": {"Field": "how Benchling computes it"}},
-      "inventory_top": "Freezer", "inventory_bottom": "Box"   # optional layout hint
+      "computed":    {"Schema": {"Field": "how Benchling computes it"}}
     }
 """
 
 from __future__ import annotations
 
-import base64
-import html
-import json
 import re
-from pathlib import Path
 from typing import Any, cast
 
-HERE = Path(__file__).resolve().parent
-TEMPLATE = HERE / "templates" / "erd_template.html"
-VENDOR = HERE / "templates" / "vendor"
-DAGRE = VENDOR / "dagre-0.8.5.min.js"
-POPPINS = {
-    400: VENDOR / "poppins-latin-400.woff2",
-    500: VENDOR / "poppins-latin-500.woff2",
-    600: VENDOR / "poppins-latin-600.woff2",
-}
+from ...errors import InvolveBenchlingError
+
+__all__ = ["ErdError", "build_erd_data", "render_mermaid"]
+
 # Schemas other tools create for their own bookkeeping, left off every map, in any registry
 # liminal_remote is liminal-orm's record of the tenant's migration revision.
-TOOL_SCHEMAS = {"liminal_remote": "Liminal"}
+_TOOL_SCHEMAS = {"liminal_remote": "Liminal"}
 # Inventory schemas carry a barcode prefix (`prefix`);
 # entity schemas a registry ID prefix (`itemIdPrefix`).
-INVENTORY_FAMILIES = {
+_INVENTORY_FAMILIES = {
     "location_schema",
     "box_schema",
     "container_schema",
     "well_plate_schema",
     "matrix_plate_schema",
 }
-# The .erd.json file: the page's data, versioned so other tools can tell when its shape changes
-JSON_FORMAT, JSON_VERSION = "benchling-tenant-inspector/erd", 1
-EXTRAS_KEYS = {
-    "hidden",
-    "ingredients",
-    "hierarchy",
-    "contents",
-    "computed",
-    "inventory_top",
-    "inventory_bottom",
-}
+# The map's data names its format and version, so readers can tell when its shape changes
+_FORMAT, _VERSION = "involve-benchling/erd", 1
+_EXTRAS_KEYS = {"hidden", "ingredients", "hierarchy", "contents", "computed"}
 
 
-class ErdError(ValueError):
-    """The crawl or extras can't produce a map (unknown registry, bad extras, ...)."""
+class ErdError(InvolveBenchlingError, ValueError):
+    """No map can be built: the registries can't be listed, the registry is not in the
+    crawl, or the extras are malformed."""
 
 
 def _prefix(s: dict[str, Any]) -> dict[str, Any]:
     if s.get("itemIdPrefix"):
         return {"prefix": s["itemIdPrefix"], "prefixKind": "id"}
-    if s.get("family") in INVENTORY_FAMILIES and s.get("prefix"):
+    if s.get("family") in _INVENTORY_FAMILIES and s.get("prefix"):
         return {"prefix": s["prefix"], "prefixKind": "barcode"}
     return {"prefix": None}
 
@@ -102,7 +74,7 @@ def _registry_of(schema: dict[str, Any]) -> str | None:
     return cast("str | None", (schema.get("registry") or {}).get("id"))
 
 
-def resolve_registry(env: dict[str, Any], registry: str | None) -> tuple[str, str]:
+def _resolve_registry(env: dict[str, Any], registry: str | None) -> tuple[str, str]:
     """Return (id, name) for a registry given by name or id; the crawl's own scope if None."""
     regs: list[Any] = [r for r in (env.get("registries") or []) if isinstance(r, dict)]
     if registry is None:
@@ -112,30 +84,59 @@ def resolve_registry(env: dict[str, Any], registry: str | None) -> tuple[str, st
         if len(regs) == 1:
             return regs[0]["id"], regs[0]["name"]
         names = ", ".join(r.get("name", r["id"]) for r in regs)
-        raise ErdError(f"this crawl covers several registries; pass --registry (one of: {names})")
+        raise ErdError(f"this crawl covers several registries; pass registry= (one of: {names})")
     for r in regs:
         if registry in (r.get("id"), r.get("name")):
             return r["id"], r["name"]
     raise ErdError(f"registry {registry!r} is not in this crawl")
 
 
-def load_extras(path: str | Path | None) -> dict[str, Any]:
-    """Read and check an extras file; ``{}`` when no path is given. Raises ErdError."""
-    if not path:
-        return {}
-    extras: dict[str, Any] = json.loads(Path(path).read_text())
-    unknown = set(extras) - EXTRAS_KEYS
+def _is_str_list(value: Any) -> bool:
+    return isinstance(value, list) and all(isinstance(v, str) for v in value)
+
+
+def _check_extras(extras: Any) -> dict[str, Any]:
+    """Check hand-supplied extras and return them. Raises ErdError on any malformed entry."""
+    if not isinstance(extras, dict):
+        raise ErdError(f"extras must be a JSON object, got {type(extras).__name__}")
+    unknown = set(extras) - _EXTRAS_KEYS
     if unknown:
-        raise ErdError(f"unknown keys in extras file: {', '.join(sorted(unknown))}")
-    for container, held in extras.get("contents", {}).items():
-        if not (isinstance(held, list) and all(isinstance(h, str) for h in held)):
+        raise ErdError(f"unknown keys in extras: {', '.join(sorted(unknown))}")
+    if not _is_str_list(extras.get("hidden", [])):
+        raise ErdError(f"hidden is a list of schema names, got {extras['hidden']!r}")
+    ingredients = extras.get("ingredients", {})
+    if not (
+        isinstance(ingredients, dict) and all(isinstance(v, str) for v in ingredients.values())
+    ):
+        raise ErdError(
+            f"ingredients maps a mixture schema to its ingredient schema, got {ingredients!r}"
+        )
+    contents = extras.get("contents", {})
+    if not isinstance(contents, dict):
+        raise ErdError(f"contents maps a container schema to schema names, got {contents!r}")
+    for container, held in contents.items():
+        if not _is_str_list(held):
             raise ErdError(
                 "contents maps a container schema to a list of schema names, "
                 f"got {container!r}: {held!r}"
             )
-    for pair in extras.get("hierarchy", []):
-        if not (isinstance(pair, list) and len(pair) == 2):
+    hierarchy = extras.get("hierarchy", [])
+    if not isinstance(hierarchy, list):
+        raise ErdError(f"hierarchy is a list of [holder, held] pairs, got {hierarchy!r}")
+    for pair in hierarchy:
+        if not (_is_str_list(pair) and len(pair) == 2):
             raise ErdError(f"hierarchy entries are [holder, held] pairs, got {pair!r}")
+    computed = extras.get("computed", {})
+    if not (
+        isinstance(computed, dict)
+        and all(
+            isinstance(fields, dict) and all(isinstance(d, str) for d in fields.values())
+            for fields in computed.values()
+        )
+    ):
+        raise ErdError(
+            f"computed maps a schema to {{field: how Benchling computes it}}, got {computed!r}"
+        )
     return extras
 
 
@@ -161,13 +162,54 @@ def build_erd_data(
     env: dict[str, Any],
     registry: str | None = None,
     extras: dict[str, Any] | None = None,
-    findings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Everything the page needs, as plain JSON. Raises ErdError on bad input."""
-    extras = extras or {}
+    """Return the schema map of one registry as plain JSON.
+
+    Args:
+        env: a crawl, as :func:`~involve_benchling.tools.discovery.crawl.crawl_erd_env`
+            returns it. Its ``_meta`` names the tenant and crawl time.
+        registry: the registry's name or id. ``None`` picks the crawl's only registry, or
+            the one ``_meta.registry`` names.
+        extras: hand-supplied facts the API does not expose (see the module docstring),
+            as a dict. They are checked here.
+
+    Returns:
+        A dict that ``json.dumps`` can save, with these keys:
+
+        - ``format`` (``"involve-benchling/erd"``) and ``version`` (``1``), so the data
+          describes itself.
+        - ``meta``: ``tenant`` (short id), ``tenantUrl``, ``crawledAt`` (UTC,
+          ``YYYY-MM-DDTHH:MM:SSZ``), ``registry``, ``registryShort`` (the name without a
+          trailing " Registry"), ``registryId``, ``complete`` (the whole crawl came back),
+          ``schemasComplete`` and ``schemaGap`` (``None``, or ``{"lines": [...]}``
+          saying what of the schemas section is missing), and ``allResultsOf`` (the
+          owning organization's name when every result schema it owns is included).
+        - ``nodes``: one per schema on the map, sorted by family then name: ``id``,
+          ``name``, ``family`` (e.g. ``entity_schema``), ``type`` (the entity type),
+          ``listedAs`` (only when Benchling listed a different type), ``scope``
+          (``registry`` or ``org``), ``prefix`` and ``prefixKind`` (``id`` or
+          ``barcode``), ``naming`` (the naming template as ``{"t": "field" | "text" |
+          "token", "v": ...}`` parts), ``fields`` and ``detailError`` (its fields failed
+          to load).
+        - Each field: ``n`` (name), ``k`` (kind, e.g. ``CustomEntityLink``), ``req``,
+          ``multi``, and when they apply: ``der`` (``C`` computed or ``S`` snapshot),
+          ``def`` (a hand-supplied computed definition), ``unit``, ``to``/``toName``/
+          ``inScope`` (a link to a schema on the map), ``hiddenTo``/``offWhy`` (a link to
+          a schema left off it, and why), ``dd``/``ddN`` (a dropdown and its option count).
+        - ``dropdowns``: each used dropdown's name to ``[[option, archived], ...]``.
+        - ``hierarchy`` (``[holder, held]`` pairs) and ``contents`` (``[container,
+          schema]`` pairs), both from extras.
+        - ``hidden``: schema names left off on request; ``notes``: plain-language notes
+          on what the map shows and leaves out.
+
+    Raises:
+        ErdError: the registry is not in the crawl, or the extras are malformed or name
+            schemas that are not on the map.
+    """
+    extras = _check_extras(extras or {})
     schemas: dict[str, Any] = env.get("schemas") or {}
     dropdowns: dict[str, Any] = env.get("dropdowns") or {}
-    reg_id, reg_name = resolve_registry(env, registry)
+    reg_id, reg_name = _resolve_registry(env, registry)
 
     by_name: dict[str, list[str]] = {}
     for sid, s in schemas.items():
@@ -182,7 +224,7 @@ def build_erd_data(
     tool = {
         sid
         for sid, s in schemas.items()
-        if s.get("name") in TOOL_SCHEMAS or s.get("systemName") in TOOL_SCHEMAS
+        if s.get("name") in _TOOL_SCHEMAS or s.get("systemName") in _TOOL_SCHEMAS
     }
     excluded = hidden | archived | tool
 
@@ -244,7 +286,7 @@ def build_erd_data(
             return "hidden"
         if target in tool:
             t = schemas[target]
-            owner = TOOL_SCHEMAS.get(t.get("name")) or TOOL_SCHEMAS.get(t.get("systemName"))
+            owner = _TOOL_SCHEMAS.get(t.get("name")) or _TOOL_SCHEMAS.get(t.get("systemName"))
             return f"{owner} bookkeeping"
         other = _registry_of(schemas[target])
         return (reg_names.get(other) or "another registry") if other else "organization-level"
@@ -303,7 +345,7 @@ def build_erd_data(
                 "detailError": bool(s.get("_detail_error")),
             }
         )
-    gap = schema_gap(env, sum(1 for n in nodes if n["detailError"]))
+    gap = _schema_gap(env, sum(1 for n in nodes if n["detailError"]))
 
     node_ids = {n["name"]: n["id"] for n in nodes}
     notes: list[str] = []
@@ -342,8 +384,8 @@ def build_erd_data(
         notes.append(f"Also left off on request: {', '.join(hidden_names)}.")
     if any("hiddenTo" in f for n in nodes for f in n["fields"]):
         notes.append(
-            "Fields that link to a schema not on this map stay on their cards, "
-            "with the target named and no arrow drawn."
+            "Fields that link to a schema not on this map are kept with the target named, "
+            "but are not linked to it."
         )
     if ingredients:
         pairs = "; ".join(f"{m} → {i}" for m, i in ingredients.items())
@@ -372,7 +414,7 @@ def build_erd_data(
             "the API reports only that a field is computed."
         )
     notes.append(
-        "Computed (ƒx) and snapshot labels come from each field's derivation type in Benchling."
+        "Computed and snapshot fields are marked from each field's derivation type in Benchling."
     )
     if org_name:
         notes.append(
@@ -385,35 +427,25 @@ def build_erd_data(
             "so only result schemas that link to or from it are shown."
         )
 
-    findings = findings or {}
-    found = [
-        {
-            "check": f.get("check"),
-            "sev": f.get("severity"),
-            "title": f.get("title"),
-            "id": (f.get("subject") or {}).get("id"),
-        }
-        for f in findings.get("findings", [])
-        if (f.get("subject") or {}).get("id") in keep
-    ]
-
     meta = env.get("_meta") or {}
     status = env.get("_status") or {}
     short = reg_name[: -len(" Registry")] if reg_name.endswith(" Registry") else reg_name
     return {
+        "format": _FORMAT,
+        "version": _VERSION,
         "meta": {
-            "tenant": meta.get("tenant_url"),
+            "tenant": meta.get("tenant"),
+            "tenantUrl": meta.get("tenantUrl"),
             "registry": reg_name,
             "registryShort": short,
             "registryId": reg_id,
-            "crawledAt": (meta.get("generated_at") or "")[:19],
+            "crawledAt": meta.get("crawledAt"),
             "complete": bool(status.get("complete", True)),
             "schemasComplete": gap is None,
             "schemaGap": gap,
             "allResultsOf": org_name,
         },
         "nodes": nodes,
-        "findings": found,
         "dropdowns": {
             dropdowns[d].get("name"): [
                 [o.get("name"), bool(o.get("archived"))] for o in dropdowns[d].get("options") or []
@@ -423,7 +455,6 @@ def build_erd_data(
         "hierarchy": hierarchy,
         "contents": contents,
         "hidden": hidden_names,
-        "layout": {k: extras[k] for k in ("inventory_top", "inventory_bottom") if k in extras},
         "notes": notes,
     }
 
@@ -434,7 +465,7 @@ def _short_reason(reason: Any) -> str:
     return ", ".join(parts[:2]) if len(parts) > 1 and parts[1].startswith("HTTP ") else parts[0]
 
 
-def schema_gap(env: dict[str, Any], detail_failed_on_map: int = 0) -> dict[str, Any] | None:
+def _schema_gap(env: dict[str, Any], detail_failed_on_map: int = 0) -> dict[str, Any] | None:
     """What the crawl missed of the *schemas* section, or None if it is complete.
 
     The map is drawn only from schemas (and dropdown labels), so this, not the
@@ -496,75 +527,6 @@ def schema_gap(env: dict[str, Any], detail_failed_on_map: int = 0) -> dict[str, 
     return {"lines": lines}
 
 
-def partial_banner(data: dict[str, Any]) -> str:
-    """The always-visible banner for a map whose schema data is incomplete ('' if complete)."""
-    gap = data["meta"].get("schemaGap")
-    if not gap:
-        return ""
-    detail = " ".join(html.escape(line) for line in gap["lines"])
-    return (
-        '<div class="partial" id="partial" role="alert">'
-        '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">'
-        '<path d="M8 1.5 15 14H1z" '
-        'fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>'
-        '<path d="M8 6v3.6M8 11.6v.4" stroke="currentColor" stroke-width="1.6" '
-        'stroke-linecap="round"/></svg>'
-        f"<p><b>Partial crawl. This map may be missing schemas.</b> {detail} "
-        "Re-crawl before relying on it.</p></div>"
-    )
-
-
-def _fonts_css() -> str:
-    return "".join(
-        "@font-face{font-family:'Poppins';font-style:normal;"
-        f"font-weight:{w:d};font-display:swap;"
-        f"src:url(data:font/woff2;base64,{base64.b64encode(p.read_bytes()).decode()}) "
-        "format('woff2')}"
-        for w, p in POPPINS.items()
-    )
-
-
-def _dagre_js() -> str:
-    js = DAGRE.read_text(encoding="utf-8")
-    if "</script" in js.lower():
-        raise ErdError("vendored dagre contains '</script' and cannot be inlined")
-    return js
-
-
-def render_html(data: dict[str, Any], template: Path = TEMPLATE) -> str:
-    """Fill the template. Everything is inlined, so the page needs no network."""
-    page = template.read_text(encoding="utf-8")
-    meta = data["meta"]
-    host = (meta.get("tenant") or "").replace("https://", "").rstrip("/")
-    blob = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
-    short = html.escape(meta["registryShort"])
-    rest = html.escape(meta["registry"][len(meta["registryShort"]) :])
-    values = {
-        "__TITLE__": html.escape(f"{meta['registryShort']} Schema Map"),
-        "__KICKER__": html.escape(f"{host} · schema map"),
-        "__H1__": f"<b>{short}</b>{rest}",
-        "__ERD_JSON__": blob,
-        "__PARTIAL__": partial_banner(data),
-        "__FONTS_CSS__": _fonts_css(),
-        "__DAGRE_JS__": _dagre_js(),
-    }
-    for token in values:
-        if page.count(token) != 1:
-            raise ErdError(f"template placeholder {token} must appear exactly once")
-    # one pass, so text inserted for one placeholder is never scanned for another
-    return re.sub("|".join(map(re.escape, values)), lambda m: values[m.group(0)], page)
-
-
-def render_json(data: dict[str, Any]) -> str:
-    """The page's data as a standalone file, for scripts, diffs and other renderers."""
-    return (
-        json.dumps(
-            {"format": JSON_FORMAT, "version": JSON_VERSION, **data}, ensure_ascii=False, indent=2
-        )
-        + "\n"
-    )
-
-
 def _mm_word(text: str) -> str:
     """A Mermaid attribute name or type: letters, digits and underscores only."""
     w = re.sub(r"\W+", "_", text or "").strip("_")
@@ -579,16 +541,16 @@ def _mm_text(text: str) -> str:
 def render_mermaid(data: dict[str, Any]) -> str:
     """The map as a Mermaid erDiagram: schemas, their fields, and the links between them.
 
-    Mermaid has nowhere to put findings, dropdown options, naming templates or saved
-    layouts, so those stay in the HTML and JSON. Link ends follow the crow's-foot on the
-    page: a single link field is one-or-none to many (exactly one when required), a
-    multi-select link is many to many. As on the page, a computed field that points back at
-    its own schema gets no line. Mermaid draws identical lines once, so a label that repeats
-    between the same two schemas (two fields both named "Strain") is numbered.
+    Mermaid has nowhere to put dropdown options or naming templates, so those stay in the
+    data. Link ends use crow's-foot notation: a single link field is one-or-none to many
+    (exactly one when required), a multi-select link is many to many. A computed field
+    that points back at its own schema gets no line. Mermaid draws identical lines once,
+    so a label that repeats between the same two schemas (two fields both named
+    "Strain") is numbered.
     """
     meta = data["meta"]
     out = [
-        f"%% {meta['registry']} schema map, from {meta.get('tenant') or 'a saved crawl'} "
+        f"%% {meta['registry']} schema map, from {meta.get('tenantUrl') or 'a saved crawl'} "
         f"crawled {meta.get('crawledAt')}"
     ]
     if meta.get("schemaGap"):
@@ -643,18 +605,3 @@ def render_mermaid(data: dict[str, Any]) -> str:
             f'    {by_name[container]} }}o--o{{ {by_name[entity]} : "contains (added by hand)"'
         )
     return "\n".join(out) + "\n"
-
-
-def summarize(data: dict[str, Any]) -> str:
-    cats: dict[str, int] = {}
-    for n in data["nodes"]:
-        cats[n["family"]] = cats.get(n["family"], 0) + 1
-    links = sum(1 for n in data["nodes"] for f in n["fields"] if f.get("to"))
-    fields = sum(1 for n in data["nodes"] for f in n["fields"] if f.get("k") != "Ingredients")
-    parts = ", ".join(
-        f"{v} {k.replace('_schema', '').replace('_', ' ')}" for k, v in sorted(cats.items())
-    )
-    return (
-        f"{len(data['nodes'])} schemas ({parts}); {fields} fields, {links} link fields; "
-        f"{len(data['findings'])} findings"
-    )

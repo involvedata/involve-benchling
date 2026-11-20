@@ -22,7 +22,7 @@ endorsed by Benchling, Inc.
 | **DataFrames** | `involve_benchling.dataframes` | Explicit `to_dataframe()` that expands V3 `schemaFields` into one typed, named column per field. Optional extra. |
 | **Read-only clients** | `involve_benchling.core.readonly` | A client that cannot change tenant data, enforced in the HTTP transport below every SDK method. |
 | **Rate-limit pacing** | `involve_benchling.core.pacing` | Caps concurrent requests and their rate, pauses every request after a `429` and resends rejected requests, so large crawls stay under Benchling's rate limit. On by default. |
-| **Discovery & ERDs** | `involve_benchling.tools.discovery` | A read-only crawl of every schema with its fields, dropdowns, registries and organizations, recording whether each part came back complete. Draws a registry's interactive ERD (schema map) as a self-contained HTML page, versioned JSON or a Mermaid `erDiagram`. |
+| **Discovery & ERDs** | `involve_benchling.tools.discovery` | A read-only crawl of every schema with its fields, dropdowns, registries and organizations, recording whether each part came back complete. Builds a registry's ERD (schema map) as versioned data, or a Mermaid `erDiagram`. |
 | **Testing** | `involve_benchling.testing` | pytest plugin: env-based config/client fixtures and a `benchling_tracker` that cleans up every resource a test created — even on failure. |
 
 ## Install
