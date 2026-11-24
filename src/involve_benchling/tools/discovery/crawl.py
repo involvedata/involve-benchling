@@ -107,7 +107,7 @@ def _wire(model: Any) -> dict[str, Any]:
     return out
 
 
-async def _all_items(call: Awaitable[Any], *, limit: int | None = None) -> list[Any]:
+async def _all_items(call: Awaitable[Any]) -> list[Any]:
     """Await an SDK list call and return every item, across pages.
 
     Paged calls return an ``AsyncPager``, whose ``items`` holds only the first
@@ -115,13 +115,11 @@ async def _all_items(call: Awaitable[Any], *, limit: int | None = None) -> list[
     """
     result = await call
     if not isinstance(result, AsyncPager):
-        return list(result.items or [])[:limit]
+        return list(result.items or [])
     out: list[Any] = []
     async with aclosing(result.__aiter__()) as items:  # type: ignore[type-var]
         async for item in items:
             out.append(item)
-            if limit is not None and len(out) >= limit:
-                break
     return out
 
 

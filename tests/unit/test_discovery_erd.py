@@ -615,6 +615,24 @@ def test_meta_from_a_discovery_crawl() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("crawl_meta", "named"),
+    [
+        (
+            {"tenant": "example", "tenantUrl": "https://example.benchling.com"},
+            "example.benchling.com",
+        ),
+        ({"tenant": "example"}, "from example crawled"),
+        ({}, "from an unnamed tenant crawled"),
+    ],
+)
+def test_mermaid_header_names_the_tenant(crawl_meta: dict[str, str], named: str) -> None:
+    env = json.loads(json.dumps(ENV))
+    env["_meta"] = crawl_meta
+    header = render_mermaid(build_erd_data(env, "Main Registry")).splitlines()[0]
+    assert named in header
+
+
 def test_data_has_no_findings() -> None:
     assert "findings" not in build_erd_data(ENV, "Main Registry", EXTRAS)
 

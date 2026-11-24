@@ -1,7 +1,7 @@
 """Cross-resource workflow tools.
 
 - :mod:`~involve_benchling.tools.discovery`: read-only schema crawl and
-  interactive registry ERDs.
+  registry ERDs, returned as data.
 
 Planned (see the roadmap in the README):
 

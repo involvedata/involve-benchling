@@ -319,7 +319,7 @@ def build_erd_data(
                     o["def"] = d
             if target in schemas and target in keep:
                 o.update(to=target, toName=schemas[target].get("name"), inScope=True)
-            elif target in schemas:  # a schema left off the map: keep the field, name it, no arrow
+            elif target in schemas:  # a schema left off the map: name it, but no link
                 o.update(hiddenTo=schemas[target].get("name"), offWhy=off_map_reason(target))
             elif target in dropdowns:
                 dd = dropdowns[target]
@@ -469,10 +469,9 @@ def _schema_gap(env: dict[str, Any], detail_failed_on_map: int = 0) -> dict[str,
     """What the crawl missed of the *schemas* section, or None if it is complete.
 
     The map is drawn only from schemas (and dropdown labels), so this, not the
-    crawl-wide flag, decides the partial-crawl banner. A failure in an unrelated
-    section, notebook entries say, does not make the map incomplete. Unknown is
-    treated as incomplete: a crawl that says it is partial without naming its
-    sections gets the banner.
+    crawl-wide flag, decides ``meta.schemaGap``. A failure in another section, such
+    as organizations, does not make the map incomplete. Unknown is treated as
+    incomplete: a crawl that says it is partial without naming its sections gets a gap.
     """
     status = env.get("_status")
     if env.get("schemas") is None:
@@ -549,10 +548,8 @@ def render_mermaid(data: dict[str, Any]) -> str:
     "Strain") is numbered.
     """
     meta = data["meta"]
-    out = [
-        f"%% {meta['registry']} schema map, from {meta.get('tenantUrl') or 'a saved crawl'} "
-        f"crawled {meta.get('crawledAt')}"
-    ]
+    tenant = meta.get("tenantUrl") or meta.get("tenant") or "an unnamed tenant"
+    out = [f"%% {meta['registry']} schema map, from {tenant} crawled {meta.get('crawledAt')}"]
     if meta.get("schemaGap"):
         out.append(
             "%% PARTIAL CRAWL: this map may be missing schemas. "
