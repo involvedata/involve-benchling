@@ -117,3 +117,65 @@ class FakeClock:
 
     async def async_sleep(self, seconds: float) -> None:
         self.sleep(seconds)
+
+
+class FakeModel:
+    """Stands in for an SDK model: attributes plus a wire-format ``model_dump``."""
+
+    def __init__(self, **fields: Any) -> None:
+        self.__dict__.update(fields)
+
+    def model_dump(self, **_: Any) -> dict[str, Any]:
+        return dict(self.__dict__)
+
+
+class FakeUnpaged:
+    """An unpaged list response: the whole list in ``items``."""
+
+    def __init__(self, items: Iterable[Any]) -> None:
+        self.items = list(items)
+
+
+class AsyncFakeResource:
+    """An ``AsyncBenchling`` resource client for crawl tests.
+
+    ``list`` returns ``items`` (or raises ``fail``) and counts itself in
+    ``list_calls``. Every ``list_*`` child
+    listing returns nothing (or raises ``detail_fail``), and ``get`` returns a
+    record with an empty naming template (or raises ``get_fail``).
+    """
+
+    def __init__(
+        self,
+        items: Iterable[Any] = (),
+        *,
+        fail: BaseException | None = None,
+        detail_fail: BaseException | None = None,
+        get_fail: BaseException | None = None,
+    ) -> None:
+        self.items = list(items)
+        self.fail = fail
+        self.detail_fail = detail_fail
+        self.get_fail = get_fail
+        self.list_calls = 0
+
+    async def list(self, **_: Any) -> FakeUnpaged:
+        self.list_calls += 1
+        if self.fail:
+            raise self.fail
+        return FakeUnpaged(self.items)
+
+    async def _children(self, *_: Any) -> FakeUnpaged:
+        if self.detail_fail:
+            raise self.detail_fail
+        return FakeUnpaged([])
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("list_"):
+            return self._children
+        raise AttributeError(name)
+
+    async def get(self, item_id: str) -> FakeModel:
+        if self.get_fail:
+            raise self.get_fail
+        return FakeModel(id=item_id, nameTemplate={"parts": []})

@@ -4,6 +4,38 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## 0.2.0 (unreleased)
+
+### Added
+
+- `tools.discovery`, moved from Involve Data's Benchling tenant inspector so
+  other tools can share it. It returns data and leaves saving and display to
+  the caller.
+  - `crawl_erd_env()` crawls every schema family with its field definitions,
+    validation rules and fieldsets, plus dropdowns, registries and
+    organizations, through an `AsyncBenchling` client. Read-only. It lists
+    registries first and raises `ErdError` with Benchling's reason if that
+    fails, before crawling anything else. Each other section records its
+    outcome under `_status`, and `_meta` records the tenant (`tenant`,
+    `tenantUrl`) and when the crawl started (`crawledAt`, UTC). A failed
+    section is `None`, never `[]`, and a schema whose fields failed to load
+    is marked `_detail_error`, never shown with no fields. Most of the
+    endpoints it calls are beta, so the client needs
+    `BenchlingConfig(early_access=True)`.
+  - `build_erd_data()` turns a crawl into the ERD (schema map) of one
+    registry as plain data: its live schemas, the organization-level schemas
+    that link to or from it and the owning organization's result schemas.
+    The data names its format (`"format": "involve-benchling/erd"`,
+    `"version": 1`), so `json.dumps` can save it, and its docstring
+    documents the shape. It takes optional hand-supplied extras as a dict
+    and checks them. A map from a partial schema crawl says what is missing
+    in `meta.schemaGap`.
+  - `render_mermaid()` draws the map as a Mermaid `erDiagram`, with a
+    warning when the schema crawl was partial.
+- `core.describe_error()` describes an SDK error in one line (type, HTTP
+  status and Benchling's message), without the response headers and cookies
+  the SDK's own message carries.
+
 ## 0.1.2 (2026-10-23)
 
 ### Added

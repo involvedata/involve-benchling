@@ -1,8 +1,9 @@
 """Cross-resource workflow tools.
 
+- :mod:`~involve_benchling.tools.discovery`: read-only schema crawl and
+  registry ERDs, returned as data.
+
 Planned (see the roadmap in the README):
 
-- ``discovery``: tenant environment discovery -- schemas, dropdowns,
-  relationships -- with ERD and documentation generation.
 - ``entry_search``: entry search with automatic user/project resolution.
 """

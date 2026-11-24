@@ -13,11 +13,12 @@ the SDK directly.
 
 | Path | Contents |
 |---|---|
-| `src/involve_benchling/core/` | `BenchlingConfig`, `connect()`, the read-only `httpx` transport |
+| `src/involve_benchling/core/` | `BenchlingConfig`, `connect()`, the read-only `httpx` transport, `describe_error()` |
 | `src/involve_benchling/cache/` | Cache facade, policy, memory and disk backends |
 | `src/involve_benchling/resolve/` | Generic lookups over any `list` resource |
 | `src/involve_benchling/dataframes.py` | pandas adapters (optional extra) |
 | `src/involve_benchling/testing/` | pytest plugin and `ResourceTracker` |
+| `src/involve_benchling/tools/discovery/` | Schema crawl and registry ERD, returned as data |
 | `tests/fixtures/` | Shared fakes, builders and a canned tenant |
 | `docs/design/` | Design documents for planned modules |
 
